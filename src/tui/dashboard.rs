@@ -1,7 +1,7 @@
+use super::bar;
 use super::detail::DetailView;
 use super::provider_card::ProviderCard;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
-use chrono::Utc;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -77,10 +77,22 @@ impl Dashboard {
     }
 
     pub fn selected_provider(&self) -> Option<&ProviderResult> {
-        match self.entries.get(self.selected_index)? {
+        let order = self.visual_order();
+        let entry_idx = *order.get(self.selected_index)?;
+        match self.entries.get(entry_idx)? {
             ProviderEntry::Done(r) => Some(r),
             ProviderEntry::Loading => None,
         }
+    }
+
+    /// Permutation of entry indices sorted by `card_weight` ascending so
+    /// short cards render at the top and the tallest (usually minimax)
+    /// ends up in its own row at the bottom. Stable so loaded cards don't
+    /// jitter relative to each other as long as their weights tie.
+    fn visual_order(&self) -> Vec<usize> {
+        let mut indices: Vec<usize> = (0..self.entries.len()).collect();
+        indices.sort_by_key(|&i| Self::card_weight(&self.entries[i]));
+        indices
     }
 
     fn current_page(&self) -> usize {
@@ -269,6 +281,7 @@ impl Dashboard {
         .style(Style::new().dim());
         f.render_widget(footer, footer_area);
 
+        let order = self.visual_order();
         let page_count = page_end - page_start;
         let cols = layout.cols.min(page_count.max(1));
         let rows = page_count.div_ceil(cols);
@@ -277,8 +290,9 @@ impl Dashboard {
         // that row, so a row containing a minimax card with 10 windows gets
         // more vertical space than a row of single-window zai/claude cards.
         let mut row_weights: Vec<u32> = vec![1; rows];
-        for (i, entry_idx) in (page_start..page_end).enumerate() {
+        for (i, visual_pos) in (page_start..page_end).enumerate() {
             let row_i = i / cols;
+            let entry_idx = order[visual_pos];
             let w = Self::card_weight(&self.entries[entry_idx]);
             if w > row_weights[row_i] {
                 row_weights[row_i] = w;
@@ -291,14 +305,15 @@ impl Dashboard {
             .collect();
         let row_rects = Layout::vertical(row_constraints).split(grid_area);
 
-        for (i, entry_idx) in (page_start..page_end).enumerate() {
+        for (i, visual_pos) in (page_start..page_end).enumerate() {
             let col_i = i % cols;
             let row_i = i / cols;
             let row_area = row_rects[row_i];
             let col_w = row_area.width / cols as u16;
             let x = row_area.x + col_i as u16 * col_w;
             let card_area = Rect::new(x, row_area.y, col_w.saturating_sub(1), row_area.height);
-            let selected = entry_idx == self.selected_index;
+            let selected = visual_pos == self.selected_index;
+            let entry_idx = order[visual_pos];
             self.render_entry(f, entry_idx, selected, card_area);
         }
     }
@@ -400,33 +415,49 @@ impl Dashboard {
                     Span::raw(quota.plan_name.clone()).italic().dim(),
                 ));
 
-                let visible: Vec<&QuotaWindow> = quota
+                let mut visible: Vec<&QuotaWindow> = quota
                     .windows
                     .iter()
                     .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
                     .collect();
+                visible.sort_by_key(|w| bar::window_sort_key(w));
                 let total = visible.len();
 
-                // Available space inside the card after header + plan line,
-                // minus one row reserved for a possible "+ N more" footer.
+                // Count distinct period buckets — used to decide whether
+                // to emit section headers (only useful with ≥2 buckets).
+                let mut buckets_seen = std::collections::BTreeSet::new();
+                for w in &visible {
+                    buckets_seen.insert(bar::window_sort_key(w).0);
+                }
+                let show_headers = total >= 6 && buckets_seen.len() >= 2;
+
                 let header_lines = lines.len() as u16;
                 let body_height = inner.height.saturating_sub(header_lines);
                 let footer_reserve: u16 = if total > 0 { 1 } else { 0 };
                 let usable = body_height.saturating_sub(footer_reserve) as usize;
 
-                // Pick the densest layout that fits all windows. Falls
-                // through to the most compact form if even that overflows,
-                // with overflow handled by an explicit "+ N more" footer.
-                let (mode, shown_count) = pick_layout(total, usable);
+                // Headers eat one line each; subtract from usable when used.
+                let header_budget = if show_headers { buckets_seen.len() } else { 0 };
+                let usable_for_rows = usable.saturating_sub(header_budget);
 
-                // Compact bar widths leave more room for labels.
+                let (mode, shown_count) = pick_layout(total, usable_for_rows);
+
                 let label_w = match mode {
                     RenderMode::TwoLine => 12,
                     RenderMode::OneLine => 11,
                 };
-                let bar_width = inner.width.saturating_sub(label_w as u16 + 11).clamp(6, 32);
+                let bar_width = inner.width.saturating_sub(label_w as u16 + 12).clamp(6, 32);
 
+                let mut last_bucket: Option<u8> = None;
                 for w in visible.iter().take(shown_count) {
+                    let bucket = bar::window_sort_key(w).0;
+                    if show_headers && Some(bucket) != last_bucket {
+                        if let Some(label) = bar::bucket_label(bucket) {
+                            lines.push(Line::from(Span::raw(label.to_string()).dim()));
+                        }
+                        last_bucket = Some(bucket);
+                    }
+
                     if w.window_type == "payg_balance" {
                         lines.push(Line::from(vec![Span::raw(format!(
                             "{:<width$} ${:.2}",
@@ -440,10 +471,9 @@ impl Dashboard {
                         continue;
                     }
                     let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
-                    let remaining_pct = 1.0 - used_pct;
-                    let time_frac = time_remaining_fraction(w);
-                    let color = bar_color(remaining_pct);
-                    let bar_spans = marked_bar(remaining_pct, time_frac, bar_width, color);
+                    let time_elapsed = bar::time_elapsed_fraction(w);
+                    let color = bar::bar_color(used_pct);
+                    let bar_spans = bar::build(used_pct, time_elapsed, bar_width, color);
 
                     match mode {
                         RenderMode::TwoLine => {
@@ -453,7 +483,7 @@ impl Dashboard {
                                 width = label_w
                             ))];
                             l1.extend(bar_spans);
-                            l1.push(Span::raw(format!(" {:>3.0}%", remaining_pct * 100.0)));
+                            l1.push(Span::raw(format!(" {:>3.0}%", used_pct * 100.0)));
                             lines.push(Line::from(l1));
                             lines.push(Line::from(vec![Span::raw(format!(
                                 "{:width$}{} / {} left",
@@ -471,7 +501,7 @@ impl Dashboard {
                                 width = label_w
                             ))];
                             l.extend(bar_spans);
-                            l.push(Span::raw(format!(" {:>3.0}% ", remaining_pct * 100.0)));
+                            l.push(Span::raw(format!(" {:>3.0}% ", used_pct * 100.0)));
                             l.push(Span::raw(format_num(w.remaining)).dim());
                             lines.push(Line::from(l));
                         }
@@ -606,95 +636,6 @@ fn pick_layout(total: usize, usable_lines: usize) -> (RenderMode, usize) {
     (RenderMode::OneLine, one_fits.min(total))
 }
 
-/// Fraction of the window's time period that is *still remaining*, based on
-/// `reset_at` minus "now" over the total `period_seconds`. Returns None if
-/// either input is missing. Mirrors the semantics of `remaining_pct` on the
-/// quota bar, so both can share a single axis.
-fn time_remaining_fraction(w: &QuotaWindow) -> Option<f64> {
-    let reset = w.reset_at?;
-    let period = w.period_seconds?;
-    if period <= 0 {
-        return None;
-    }
-    let remaining = (reset - Utc::now()).num_seconds();
-    if remaining <= 0 {
-        return Some(0.0);
-    }
-    Some((remaining as f64 / period as f64).clamp(0.0, 1.0))
-}
-
-/// Build a quota bar as styled spans, with `remaining_pct` as the fill and
-/// an optional `┃` marker at the position corresponding to the fraction of
-/// time *remaining* in the window. If the marker sits inside the filled
-/// region, you're underspending (good); in the empty region, overspending.
-fn marked_bar<'a>(
-    remaining_pct: f64,
-    time_remaining_pct: Option<f64>,
-    width: u16,
-    color: Color,
-) -> Vec<Span<'a>> {
-    let w = width as usize;
-    if w == 0 {
-        return Vec::new();
-    }
-    let filled = ((remaining_pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
-    let marker_pos = time_remaining_pct
-        .map(|t| (((t.clamp(0.0, 1.0)) * w as f64).round() as usize).min(w.saturating_sub(1)));
-
-    // Render each column and coalesce same-style runs into minimal spans.
-    enum Cell {
-        Full,
-        Empty,
-        Marker,
-    }
-    let mut cells: Vec<Cell> = (0..w)
-        .map(|i| if i < filled { Cell::Full } else { Cell::Empty })
-        .collect();
-    if let Some(pos) = marker_pos {
-        cells[pos] = Cell::Marker;
-    }
-
-    let bar_style = Style::new().fg(color);
-    let marker_style = Style::new().fg(Color::White).bold();
-    let mut out: Vec<Span<'a>> = Vec::new();
-    let mut buf = String::new();
-    let mut cur_marker = matches!(cells[0], Cell::Marker);
-    for cell in &cells {
-        let is_marker = matches!(cell, Cell::Marker);
-        if is_marker != cur_marker && !buf.is_empty() {
-            out.push(Span::styled(
-                std::mem::take(&mut buf),
-                if cur_marker { marker_style } else { bar_style },
-            ));
-            cur_marker = is_marker;
-        }
-        buf.push(match cell {
-            Cell::Full => '█',
-            Cell::Empty => '░',
-            Cell::Marker => '┃',
-        });
-    }
-    if !buf.is_empty() {
-        out.push(Span::styled(
-            buf,
-            if cur_marker { marker_style } else { bar_style },
-        ));
-    }
-    out
-}
-
-fn bar_color(remaining_pct: f64) -> Color {
-    // Colors reflect the *remaining* fraction — healthy when lots of quota
-    // left, red when almost exhausted.
-    if remaining_pct <= 0.10 {
-        Color::Red
-    } else if remaining_pct <= 0.25 {
-        Color::Yellow
-    } else {
-        Color::Green
-    }
-}
-
 fn format_num(n: i64) -> String {
     if n.abs() >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
@@ -718,35 +659,6 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn bar_as_string(spans: &[Span<'_>]) -> String {
-        spans.iter().map(|s| s.content.as_ref()).collect()
-    }
-
-    #[test]
-    fn marked_bar_without_marker_renders_full_and_empty() {
-        let s = bar_as_string(&marked_bar(1.0, None, 4, Color::Green));
-        assert_eq!(s, "████");
-        let s = bar_as_string(&marked_bar(0.0, None, 4, Color::Green));
-        assert_eq!(s, "░░░░");
-    }
-
-    #[test]
-    fn marked_bar_places_marker_in_filled_region_when_ahead() {
-        // 80% quota remaining (filled=3 of 4), 50% time remaining (marker
-        // at idx 2) — marker overlays the filled region, which visually
-        // indicates "ahead of schedule".
-        let s = bar_as_string(&marked_bar(0.8, Some(0.5), 4, Color::Green));
-        assert_eq!(s, "██┃░");
-    }
-
-    #[test]
-    fn marked_bar_places_marker_in_empty_region_when_behind() {
-        // 20% quota remaining, 75% time remaining → marker sits in empty
-        // area at index 3 of 4.
-        let s = bar_as_string(&marked_bar(0.2, Some(0.75), 4, Color::Red));
-        assert_eq!(s, "█░░┃");
-    }
 
     #[test]
     fn format_num_scales() {

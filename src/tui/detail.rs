@@ -1,7 +1,9 @@
 use crate::providers::{ProviderResult, ProviderStatus, QuotaWindow};
+use crate::tui::bar;
 use crate::tui::freshness::{FreshnessLabel, Staleness};
 use chrono::Utc;
 use ratatui::prelude::*;
+use std::collections::BTreeSet;
 
 pub struct DetailView {
     pub result: ProviderResult,
@@ -48,7 +50,23 @@ impl DetailView {
                     .dim()]));
                 } else {
                     lines.push(Line::from(""));
-                    for window in &quota.windows {
+                    let mut sorted: Vec<&QuotaWindow> = quota.windows.iter().collect();
+                    sorted.sort_by_key(|w| bar::window_sort_key(w));
+                    let buckets_seen: BTreeSet<u8> =
+                        sorted.iter().map(|w| bar::window_sort_key(w).0).collect();
+                    let show_headers = sorted.len() >= 3 && buckets_seen.len() >= 2;
+                    let mut last_bucket: Option<u8> = None;
+                    for window in sorted {
+                        let bucket = bar::window_sort_key(window).0;
+                        if show_headers && Some(bucket) != last_bucket {
+                            if let Some(label) = bar::bucket_label(bucket) {
+                                lines.push(Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::raw(label).dim(),
+                                ]));
+                            }
+                            last_bucket = Some(bucket);
+                        }
                         render_window(&mut lines, window, bar_width);
                         lines.push(Line::from(""));
                     }
@@ -130,18 +148,11 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
     let used = w.used.max(0);
     let limit = w.limit.max(1);
     let used_pct = (used as f64 / limit as f64).clamp(0.0, 1.0);
-    let remaining_pct = 1.0 - used_pct;
-    let color = if remaining_pct <= 0.10 {
-        Color::Red
-    } else if remaining_pct <= 0.25 {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
-    let time_frac = time_remaining_fraction(w);
-    let bar_spans = marked_big_bar(remaining_pct, time_frac, bar_width, color);
+    let color = bar::bar_color(used_pct);
+    let time_elapsed = bar::time_elapsed_fraction(w);
+    let bar_spans = bar::build(used_pct, time_elapsed, bar_width, color);
 
-    // Row 1: name + bar + % left
+    // Row 1: name + bar + % used
     let mut l1 = vec![
         Span::raw("  "),
         Span::raw(format!("{:<14} ", truncate(&w.window_type, 14))),
@@ -149,7 +160,7 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
     l1.extend(bar_spans);
     l1.push(Span::raw(" "));
     l1.push(
-        Span::raw(format!("{:>3.0}% left", remaining_pct * 100.0))
+        Span::raw(format!("{:>3.0}% used", used_pct * 100.0))
             .bold()
             .fg(color),
     );
@@ -177,33 +188,33 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
         ]));
     }
 
-    // Row 4: pace commentary — compare quota-remaining to time-remaining.
-    if let Some(time_frac) = time_frac {
-        let diff = remaining_pct - time_frac;
-        let (label, style) = if diff >= 0.05 {
+    // Row 4: pace commentary — compare used vs time-elapsed.
+    if let Some(time_elapsed) = time_elapsed {
+        let diff = used_pct - time_elapsed;
+        let (label, style) = if diff <= -0.05 {
             (
                 format!(
-                    "pacing ahead — {:.0}% quota vs {:.0}% time left",
-                    remaining_pct * 100.0,
-                    time_frac * 100.0
+                    "pacing ahead — {:.0}% used vs {:.0}% time elapsed",
+                    used_pct * 100.0,
+                    time_elapsed * 100.0
                 ),
                 Style::new().green(),
             )
-        } else if diff <= -0.05 {
+        } else if diff >= 0.05 {
             (
                 format!(
-                    "burning fast — {:.0}% quota vs {:.0}% time left",
-                    remaining_pct * 100.0,
-                    time_frac * 100.0
+                    "burning fast — {:.0}% used vs {:.0}% time elapsed",
+                    used_pct * 100.0,
+                    time_elapsed * 100.0
                 ),
-                Style::new().yellow(),
+                Style::new().fg(Color::Rgb(255, 140, 0)),
             )
         } else {
             (
                 format!(
-                    "on pace — {:.0}% quota vs {:.0}% time left",
-                    remaining_pct * 100.0,
-                    time_frac * 100.0
+                    "on pace — {:.0}% used vs {:.0}% time elapsed",
+                    used_pct * 100.0,
+                    time_elapsed * 100.0
                 ),
                 Style::new().dim(),
             )
@@ -213,66 +224,6 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
             Span::styled(label, style),
         ]));
     }
-}
-
-fn time_remaining_fraction(w: &QuotaWindow) -> Option<f64> {
-    let reset = w.reset_at?;
-    let period = w.period_seconds?;
-    if period <= 0 {
-        return None;
-    }
-    let remaining = (reset - Utc::now()).num_seconds();
-    if remaining <= 0 {
-        return Some(0.0);
-    }
-    Some((remaining as f64 / period as f64).clamp(0.0, 1.0))
-}
-
-fn marked_big_bar<'a>(
-    remaining_pct: f64,
-    time_remaining_pct: Option<f64>,
-    width: u16,
-    color: Color,
-) -> Vec<Span<'a>> {
-    let w = width as usize;
-    if w == 0 {
-        return Vec::new();
-    }
-    let filled = ((remaining_pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
-    let marker_pos = time_remaining_pct
-        .map(|t| (((t.clamp(0.0, 1.0)) * w as f64).round() as usize).min(w.saturating_sub(1)));
-
-    let bar_style = Style::new().fg(color);
-    let marker_style = Style::new().fg(Color::White).bold();
-
-    let mut out: Vec<Span<'a>> = Vec::new();
-    let mut buf = String::new();
-    let mut in_marker = false;
-
-    for i in 0..w {
-        let is_marker = marker_pos == Some(i);
-        if is_marker != in_marker && !buf.is_empty() {
-            out.push(Span::styled(
-                std::mem::take(&mut buf),
-                if in_marker { marker_style } else { bar_style },
-            ));
-            in_marker = is_marker;
-        }
-        if is_marker {
-            buf.push('┃');
-        } else if i < filled {
-            buf.push('█');
-        } else {
-            buf.push('░');
-        }
-    }
-    if !buf.is_empty() {
-        out.push(Span::styled(
-            buf,
-            if in_marker { marker_style } else { bar_style },
-        ));
-    }
-    out
 }
 
 fn freshness_span<'a>(result: &'a ProviderResult) -> Span<'a> {

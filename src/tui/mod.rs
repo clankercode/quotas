@@ -1,3 +1,4 @@
+mod bar;
 mod dashboard;
 mod detail;
 mod freshness;
