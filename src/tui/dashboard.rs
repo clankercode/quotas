@@ -40,10 +40,14 @@ pub struct Dashboard {
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     last_layout: Cell<GridLayout>,
+    /// Cached visual order, locked in when all entries are loaded.
+    /// Reset to identity order on first load; refreshes don't reshuffle.
+    stable_order: Vec<usize>,
 }
 
 impl Dashboard {
     pub fn new_loading(kinds: Vec<ProviderKind>) -> Self {
+        let n = kinds.len();
         let entries = kinds.iter().map(|_| ProviderEntry::Loading).collect();
         Self {
             kinds,
@@ -53,6 +57,7 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             last_layout: Cell::new(GridLayout::default()),
+            stable_order: (0..n).collect(),
         }
     }
 
@@ -90,12 +95,19 @@ impl Dashboard {
         if idx < self.entries.len() {
             self.entries[idx] = ProviderEntry::Done(result);
         }
+        // Freeze the visual order once all results are in, so subsequent
+        // refreshes (which temporarily set entries back to Loading) don't
+        // scramble the card positions.
+        if self.all_loaded() {
+            self.stable_order = self.compute_visual_order();
+        }
     }
 
     pub fn reset_loading(&mut self) {
         for e in &mut self.entries {
             *e = ProviderEntry::Loading;
         }
+        // stable_order intentionally preserved — cards stay in place during refresh.
     }
 
     pub fn tick_spinner(&mut self) {
@@ -117,11 +129,14 @@ impl Dashboard {
         }
     }
 
-    /// Permutation of entry indices sorted by `card_weight` ascending so
-    /// short cards render at the top and the tallest (usually minimax)
-    /// ends up in its own row at the bottom. Stable so loaded cards don't
-    /// jitter relative to each other as long as their weights tie.
+    /// Returns the cached visual order (frozen when all entries last loaded).
+    /// Using a stable cache means refreshes don't scramble card positions.
     fn visual_order(&self) -> Vec<usize> {
+        self.stable_order.clone()
+    }
+
+    /// Compute visual order by weight; called only when all entries are Done.
+    fn compute_visual_order(&self) -> Vec<usize> {
         let mut indices: Vec<usize> = (0..self.entries.len()).collect();
         indices.sort_by_key(|&i| Self::card_weight(&self.entries[i]));
         indices
