@@ -48,6 +48,7 @@ impl MinimaxProvider {
                     status: ProviderStatus::Available { quota },
                     fetched_at: Utc::now(),
                     raw_response: Some(body),
+                    auth_source: None,
                 });
             }
         }
@@ -70,6 +71,7 @@ impl MinimaxProvider {
             },
             fetched_at: Utc::now(),
             raw_response: Some(body),
+            auth_source: None,
         })
     }
 
@@ -217,6 +219,7 @@ impl crate::providers::Provider for MinimaxProvider {
                 },
                 fetched_at: Utc::now(),
                 raw_response: None,
+                auth_source: None,
             }),
         }
     }

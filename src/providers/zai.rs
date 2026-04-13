@@ -41,6 +41,7 @@ impl ZaiProvider {
                     status: ProviderStatus::Available { quota },
                     fetched_at: Utc::now(),
                     raw_response: Some(body),
+                    auth_source: None,
                 });
             }
         }
@@ -60,6 +61,7 @@ impl ZaiProvider {
             },
             fetched_at: Utc::now(),
             raw_response: Some(body),
+            auth_source: None,
         })
     }
 
@@ -195,6 +197,7 @@ impl crate::providers::Provider for ZaiProvider {
                 },
                 fetched_at: Utc::now(),
                 raw_response: None,
+                auth_source: None,
             }),
         }
     }

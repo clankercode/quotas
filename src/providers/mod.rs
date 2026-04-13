@@ -26,6 +26,15 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    /// How long before this provider auto-refreshes (seconds).
+    /// Drives both the auto-refresh timer and the freshness progress bar.
+    pub fn auto_refresh_secs(&self) -> u64 {
+        match self {
+            ProviderKind::Claude => 600,
+            _ => 300,
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             ProviderKind::Claude => "Claude",
@@ -108,6 +117,8 @@ pub struct ProviderResult {
     pub status: ProviderStatus,
     pub fetched_at: DateTime<Utc>,
     pub raw_response: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_source: Option<String>,
 }
 
 #[async_trait]

@@ -55,6 +55,7 @@ impl KimiProvider {
                 },
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
+                auth_source: None,
             });
         }
 
@@ -74,6 +75,7 @@ impl KimiProvider {
             },
             fetched_at: Utc::now(),
             raw_response: Some(body),
+            auth_source: None,
         })
     }
 
@@ -96,6 +98,7 @@ impl KimiProvider {
                 status: ProviderStatus::Available { quota },
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
+                auth_source: None,
             });
         }
 

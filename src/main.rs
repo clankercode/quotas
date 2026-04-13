@@ -242,11 +242,18 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
     };
-    match provider.fetch().await {
+    // Pre-resolve to capture the auth source string for the detail view.
+    // This is a lightweight re-resolve (env var / file read) after any token
+    // refresh that already happened in maybe_refresh_creds.
+    let auth_source = provider.auth_resolver().resolve().await.ok().map(|a| a.source);
+
+    let mut result = match provider.fetch().await {
         Ok(r) => r,
         Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
         Err(e) => network_error_result(kind, e.to_string()),
-    }
+    };
+    result.auth_source = auth_source;
+    result
 }
 
 fn fetch_provider_sync(kind: ProviderKind, config: &Config) -> ProviderResult {
@@ -266,6 +273,7 @@ fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
         status: quotas::providers::ProviderStatus::AuthRequired,
         fetched_at: chrono::Utc::now(),
         raw_response: None,
+        auth_source: None,
     }
 }
 
@@ -275,6 +283,7 @@ fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
         status: quotas::providers::ProviderStatus::NetworkError { message },
         fetched_at: chrono::Utc::now(),
         raw_response: None,
+        auth_source: None,
     }
 }
 

@@ -18,16 +18,28 @@ impl DetailView {
         let mut lines: Vec<Line> = Vec::new();
         let bar_width: u16 = width.saturating_sub(16).clamp(10, 60);
 
-        // Header
+        // Header — freshness only when we have valid auth data.
+        let show_freshness = !matches!(self.result.status, ProviderStatus::AuthRequired);
         lines.push(Line::from(vec![Span::raw(" ")]));
-        lines.push(Line::from(vec![
+        let mut header_spans = vec![
             Span::raw("  "),
             Span::raw(self.result.kind.display_name())
                 .bold()
                 .fg(Color::White),
-            Span::raw("   "),
-            freshness_span(&self.result),
-        ]));
+        ];
+        if show_freshness {
+            header_spans.push(Span::raw("   "));
+            header_spans.push(freshness_span(&self.result));
+        }
+        lines.push(Line::from(header_spans));
+
+        // Auth source line (env var name, file path, oauth path, etc.)
+        if let Some(source) = &self.result.auth_source {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(pretty_auth_source(source)).dim(),
+            ]));
+        }
 
         match &self.result.status {
             ProviderStatus::Available { quota } => {
@@ -227,9 +239,9 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, sho
     }
 }
 
-fn freshness_span<'a>(result: &'a ProviderResult) -> Span<'a> {
-    let age = (Utc::now() - result.fetched_at).num_seconds();
-    let label = FreshnessLabel::new(age);
+fn freshness_span(result: &ProviderResult) -> Span<'static> {
+    let age = (Utc::now() - result.fetched_at).num_seconds().max(0);
+    let label = FreshnessLabel::with_interval(age, result.kind.auto_refresh_secs());
     let style = match label.staleness {
         Staleness::Fresh => Style::new().cyan(),
         Staleness::Warning => Style::new().yellow(),
@@ -253,6 +265,21 @@ fn fmt_exact(n: i64) -> String {
         format!("-{}", joined)
     } else {
         joined
+    }
+}
+
+/// Format an auth source string for human display.
+/// Inputs follow the resolver conventions: "env:VAR_NAME", "file:/path",
+/// "oauth:/path", "opencode:slot-key".
+fn pretty_auth_source(source: &str) -> String {
+    if let Some(var) = source.strip_prefix("env:") {
+        format!("auth: env ${}", var)
+    } else if let Some(path) = source.strip_prefix("oauth:") {
+        format!("auth: oauth  {}", path)
+    } else if let Some(path) = source.strip_prefix("file:") {
+        format!("auth: file   {}", path)
+    } else {
+        format!("auth: {}", source)
     }
 }
 

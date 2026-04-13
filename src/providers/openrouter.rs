@@ -44,6 +44,7 @@ impl OpenRouterProvider {
                 "key": key_body,
                 "credits": credits_body,
             })),
+            auth_source: None,
         })
     }
 }
@@ -165,6 +166,7 @@ impl crate::providers::Provider for OpenRouterProvider {
                 },
                 fetched_at: Utc::now(),
                 raw_response: None,
+                auth_source: None,
             }),
         }
     }

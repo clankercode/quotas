@@ -1,6 +1,5 @@
 use super::bar;
 use super::detail::DetailView;
-use super::provider_card::ProviderCard;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
@@ -170,6 +169,10 @@ impl Dashboard {
         // scramble the card positions.
         if self.all_loaded() {
             self.stable_order = self.compute_visual_order();
+            // Clamp selected_index into the (possibly smaller) visible set.
+            if self.selected_index >= self.stable_order.len() {
+                self.selected_index = self.stable_order.len().saturating_sub(1);
+            }
         }
     }
 
@@ -212,9 +215,27 @@ impl Dashboard {
         self.stable_order.clone()
     }
 
-    /// Compute visual order by weight; called only when all entries are Done.
+    /// Number of providers currently visible in the main grid
+    /// (excludes AuthRequired entries, which are shown only in the footer).
+    fn visible_count(&self) -> usize {
+        self.stable_order.len()
+    }
+
+    /// True when the entry at `idx` has AuthRequired status.
+    fn is_auth_required_entry(entry: &ProviderEntry) -> bool {
+        matches!(
+            entry,
+            ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
+            if matches!(r.status, ProviderStatus::AuthRequired)
+        )
+    }
+
+    /// Compute visual order by weight, excluding AuthRequired providers.
+    /// Called only when all entries are Done.
     fn compute_visual_order(&self) -> Vec<usize> {
-        let mut indices: Vec<usize> = (0..self.entries.len()).collect();
+        let mut indices: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| !Self::is_auth_required_entry(&self.entries[i]))
+            .collect();
         indices.sort_by_key(|&i| Self::card_weight(&self.entries[i]));
         indices
     }
@@ -236,7 +257,10 @@ impl Dashboard {
         if layout.cols == 0 || layout.per_page == 0 {
             return;
         }
-        let total = self.entries.len();
+        let total = self.visible_count();
+        if total == 0 {
+            return;
+        }
         let page = self.current_page();
         let page_start = page * layout.per_page;
         let page_end = (page_start + layout.per_page).min(total);
@@ -290,7 +314,7 @@ impl Dashboard {
     }
 
     fn compute_layout(&self, grid_area: Rect) -> GridLayout {
-        let n = self.entries.len().max(1);
+        let n = self.visible_count().max(1);
         let max_cols = (grid_area.width / MIN_CARD_W).max(1) as usize;
         let max_rows = (grid_area.height / MIN_CARD_H).max(1) as usize;
         let per_page = (max_cols * max_rows).max(1);
@@ -356,7 +380,8 @@ impl Dashboard {
         let layout = self.compute_layout(grid_area);
         self.last_layout.set(layout);
 
-        let total = self.entries.len();
+        // Visible = non-AuthRequired providers shown in the grid.
+        let total = self.visible_count();
         let page = self.current_page();
         let pages = total.div_ceil(layout.per_page.max(1));
         let page_start = page * layout.per_page;
@@ -368,6 +393,20 @@ impl Dashboard {
             .iter()
             .filter(|e| matches!(e, ProviderEntry::Loading | ProviderEntry::Refreshing(_)))
             .count();
+
+        // Collect names of providers with no API key for the footer indicator.
+        let unconfigured: Vec<&str> = self
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
+                    if matches!(r.status, ProviderStatus::AuthRequired) =>
+                {
+                    Some(r.kind.display_name())
+                }
+                _ => None,
+            })
+            .collect();
 
         let mut header_line = vec![Span::raw(" quotas ").bold().white()];
         if loading_count > 0 {
@@ -426,12 +465,18 @@ impl Dashboard {
             .block(Block::new().borders(Borders::NONE));
         f.render_widget(title, title_area);
 
-        let footer = Paragraph::new(format!(
-            "{} of {} providers loaded",
-            total - loading_count,
-            total
-        ))
-        .style(Style::new().dim());
+        let loaded = total.saturating_sub(loading_count);
+        let footer_text = if unconfigured.is_empty() {
+            format!("{} of {} providers loaded", loaded, total)
+        } else {
+            format!(
+                "{} of {} loaded  ·  No key: {}",
+                loaded,
+                total,
+                unconfigured.join(", ")
+            )
+        };
+        let footer = Paragraph::new(footer_text).style(Style::new().dim());
         f.render_widget(footer, footer_area);
 
         let order = self.visual_order();
@@ -624,40 +669,60 @@ impl Dashboard {
         selected: bool,
         inner: Rect,
     ) {
-        let card = ProviderCard::new(result.clone(), selected);
-        let freshness = card.freshness_label();
-        let freshness_style = match freshness.staleness {
-            crate::tui::freshness::Staleness::Fresh => Style::new().cyan(),
-            crate::tui::freshness::Staleness::Warning => Style::new().yellow(),
-            crate::tui::freshness::Staleness::Stale => Style::new().red(),
-        };
+        use crate::tui::freshness::{FreshnessLabel, Staleness};
+
+        let is_auth = matches!(result.status, ProviderStatus::AuthRequired);
 
         let mut lines: Vec<Line> = Vec::new();
 
-        // Header line: name + freshness (truncate freshness to fit in one line).
+        // Header line: name (+ freshness progress bar when auth is present).
         let name_part = format!(
             "{} {}",
             if selected { "▶" } else { " " },
-            card.display_name()
+            result.kind.display_name()
         );
         let name_len = name_part.chars().count();
         let avail_for_fresh = (inner.width as usize).saturating_sub(name_len + 2);
-        let fresh_str = &freshness.label;
-        let header_line = if avail_for_fresh == 0 {
-            Line::from(Span::raw(bar::truncate_suffix(&name_part, inner.width as usize)).bold())
-        } else if fresh_str.chars().count() <= avail_for_fresh {
-            Line::from(vec![
-                Span::raw(name_part).bold(),
-                Span::raw("  "),
-                Span::styled(fresh_str.clone(), freshness_style),
-            ])
+
+        let header_line = if is_auth || avail_for_fresh == 0 {
+            // Auth-required or no space: just the name, slightly dimmed for auth.
+            let style = if is_auth { Style::new().bold().dim() } else { Style::new().bold() };
+            Line::from(Span::styled(
+                bar::truncate_suffix(&name_part, inner.width as usize),
+                style,
+            ))
         } else {
-            let truncated = bar::truncate_suffix(fresh_str, avail_for_fresh);
-            Line::from(vec![
-                Span::raw(name_part).bold(),
-                Span::raw("  "),
-                Span::styled(truncated, freshness_style.dim()),
-            ])
+            // Freshness progress bar behind the label text.
+            let elapsed = (chrono::Utc::now() - result.fetched_at).num_seconds().max(0);
+            let freshness = FreshnessLabel::with_interval(elapsed, result.kind.auto_refresh_secs());
+            let fresh_str = &freshness.label;
+
+            let field_w = fresh_str.chars().count().min(avail_for_fresh);
+            // Pad/truncate to exactly field_w chars.
+            let text: String = fresh_str.chars().take(field_w).collect();
+            let text = format!("{:<width$}", text, width = field_w);
+            let text: String = text.chars().take(field_w).collect();
+
+            let fill_n = (freshness.fraction * field_w as f64).round() as usize;
+            let fill_n = fill_n.min(field_w);
+
+            let (fg, bg_fill) = match freshness.staleness {
+                Staleness::Fresh   => (Color::Cyan,   Color::Rgb(0, 42, 28)),
+                Staleness::Warning => (Color::Yellow,  Color::Rgb(65, 38, 0)),
+                Staleness::Stale   => (Color::Red,     Color::Rgb(65, 0, 0)),
+            };
+
+            let filled_str: String = text.chars().take(fill_n).collect();
+            let unfilled_str: String = text.chars().skip(fill_n).collect();
+
+            let mut spans: Vec<Span> = vec![Span::raw(name_part).bold(), Span::raw("  ")];
+            if !filled_str.is_empty() {
+                spans.push(Span::styled(filled_str, Style::new().fg(fg).bg(bg_fill)));
+            }
+            if !unfilled_str.is_empty() {
+                spans.push(Span::styled(unfilled_str, Style::new().fg(fg).dim()));
+            }
+            Line::from(spans)
         };
         lines.push(header_line);
 
@@ -820,7 +885,7 @@ impl Dashboard {
         if layout.per_page == 0 {
             return;
         }
-        let total = self.entries.len();
+        let total = self.visible_count();
         let page = self.current_page();
         let pages = total.div_ceil(layout.per_page);
         if page + 1 < pages {
