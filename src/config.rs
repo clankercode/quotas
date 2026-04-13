@@ -5,6 +5,7 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
+    pub statusline: StatusLine,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +17,22 @@ pub struct AutoRefresh {
 impl Default for AutoRefresh {
     fn default() -> Self {
         Self { enabled: true }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StatusLine {
+    pub icons: bool,
+    pub bg_refresh: bool,
+}
+
+impl Default for StatusLine {
+    fn default() -> Self {
+        Self {
+            icons: true,
+            bg_refresh: true,
+        }
     }
 }
 

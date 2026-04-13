@@ -12,8 +12,10 @@ use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::refresh;
 use quotas::auth::{AuthResolver, MultiResolver};
+use quotas::cache;
 use quotas::config::Config;
 use quotas::output::json::JsonOutput;
+use quotas::output::statusline::{self, StatusLineConfig};
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
 use quotas::tui::Dashboard;
 use quotas::tui::Direction;
@@ -37,6 +39,29 @@ struct Args {
     /// Useful for inspecting fields we may not be parsing yet.
     #[arg(long)]
     raw: bool,
+
+    /// Compact single-line output for shell prompts / statuslines.
+    /// Reads from cache (instant, no network). If cache is stale (>30 min),
+    /// forks a background refresh unless --no-bg-refresh is set.
+    #[arg(long)]
+    statusline: bool,
+
+    /// Disable Nerd Font icons in statusline output.
+    #[arg(long)]
+    no_icons: bool,
+
+    /// Don't fork a background cache refresh even if cache is stale.
+    #[arg(long)]
+    no_bg_refresh: bool,
+
+    /// Custom format template for statusline.
+    /// Placeholders: %provider %remaining %limit %used %window %reset
+    #[arg(long)]
+    format: Option<String>,
+
+    /// Hidden: fetch all providers, merge into cache, exit silently.
+    #[arg(long, hide = true)]
+    update_cache: bool,
 
     #[arg(long, value_delimiter = ',')]
     provider: Vec<String>,
@@ -321,10 +346,12 @@ fn auto_refresh_interval(kind: ProviderKind) -> Duration {
 }
 
 fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
-    kinds
+    let results: Vec<ProviderResult> = kinds
         .into_iter()
         .map(|k| fetch_provider_sync(k, config))
-        .collect()
+        .collect();
+    cache::write_cache(&results);
+    results
 }
 
 fn spawn_fetches(
@@ -368,6 +395,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
         terminal.draw(|f| dashboard.render(f))?;
 
         while let Ok((idx, result)) = rx.try_recv() {
+            cache::write_cache(std::slice::from_ref(&result));
             dashboard.update(idx, result);
         }
 
@@ -539,6 +567,12 @@ fn main() {
     let kinds = filter_kinds(&args.provider);
     let config = Config::load();
 
+    // Hidden: fetch + write cache, exit silently (used by background refresh).
+    if args.update_cache {
+        let _ = fetch_all(kinds, &config);
+        return;
+    }
+
     if args.raw {
         let results = fetch_all(kinds, &config);
         let mut map = serde_json::Map::new();
@@ -573,9 +607,65 @@ fn main() {
         return;
     }
 
+    if args.statusline {
+        run_statusline(&args, &config);
+        return;
+    }
+
     if let Err(e) = run_tui(kinds.clone(), config) {
         eprintln!("Error: {:?}", e);
     }
+}
+
+const BG_REFRESH_THRESHOLD_SECS: u64 = 30 * 60; // 30 minutes
+
+fn run_statusline(args: &Args, config: &Config) {
+    let cache = cache::read_cache();
+
+    let sl_config = StatusLineConfig {
+        icons: if args.no_icons {
+            false
+        } else {
+            config.statusline.icons
+        },
+        providers: filter_kinds(&args.provider),
+        format: args.format.clone(),
+    };
+
+    let line = statusline::render(&cache, &sl_config);
+    if !line.is_empty() {
+        println!("{line}");
+    }
+
+    // Background refresh: if cache is stale, fork off a background process
+    // to re-fetch and merge into cache.
+    let bg_enabled = if args.no_bg_refresh {
+        false
+    } else {
+        config.statusline.bg_refresh
+    };
+    if bg_enabled {
+        if let Some(age) = cache::cache_age(&cache) {
+            if age.as_secs() >= BG_REFRESH_THRESHOLD_SECS {
+                let _ = spawn_bg_refresh();
+            }
+        }
+    }
+}
+
+fn spawn_bg_refresh() -> io::Result<()> {
+    let self_exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(self_exe);
+    cmd.arg("--update-cache");
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        cmd.arg("--"); // ensure clean arg boundary
+    }
+    cmd.spawn()?;
+    Ok(())
 }
 
 #[cfg(test)]
