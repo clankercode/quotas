@@ -136,12 +136,12 @@ impl DetailView {
 
 fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, show_headers: bool) {
     let label_src = bar::display_label(&w.window_type, show_headers);
-    // Special-case the payg balance row: no bar, just a dollar figure.
-    if w.window_type == "payg_balance" {
+    // Special-case currency balance rows: no bar, just the formatted amount.
+    if let Some((sym, scale)) = bar::currency_window(&w.window_type) {
         lines.push(Line::from(vec![
             Span::raw("  "),
             Span::raw(format!("{:<14} ", bar::truncate_suffix(&label_src, 14))),
-            Span::raw(format!("${:.2}", w.remaining as f64 / 100.0)).bold(),
+            Span::raw(format!("{}{:.2}", sym, w.remaining as f64 / scale)).bold(),
         ]));
         return;
     }

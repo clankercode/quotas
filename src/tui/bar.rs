@@ -2,6 +2,24 @@ use crate::providers::QuotaWindow;
 use chrono::Utc;
 use ratatui::prelude::*;
 
+/// Returns `(symbol, scale)` if the window type represents a currency balance
+/// (e.g. `balance_usd`, `paid_cny`). `scale` is the integer divisor to get
+/// the decimal amount (10_000.0 for ×10000 storage, 100.0 for ×100).
+pub fn currency_window(window_type: &str) -> Option<(&'static str, f64)> {
+    let lower = window_type.to_ascii_lowercase();
+    // payg_balance uses ×100 scaling (legacy Kimi format).
+    if lower == "payg_balance" {
+        return Some(("$", 100.0));
+    }
+    if lower.ends_with("_usd") {
+        return Some(("$", 10_000.0));
+    }
+    if lower.ends_with("_cny") {
+        return Some(("¥", 10_000.0));
+    }
+    None
+}
+
 /// Fraction of the window's period that has already *elapsed*. Returns
 /// None when `reset_at` or `period_seconds` is missing. Mirrors the
 /// semantics of `used_pct` so both share the same left-to-right axis.
@@ -161,7 +179,7 @@ pub fn build_labeled<'a>(
 pub fn window_sort_key(w: &QuotaWindow) -> (u8, String) {
     let wt = w.window_type.as_str();
     let lower = wt.to_ascii_lowercase();
-    let bucket = if wt == "payg_balance" {
+    let bucket = if currency_window(wt).is_some() {
         9
     } else if lower.contains("credit") {
         8
@@ -205,6 +223,13 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "monthly" => "month",
         "extra_credits" => "credits",
         "payg_balance" => "PAYG",
+        "balance_usd" | "balance_cny" => "balance",
+        "paid_cny" => "paid",
+        "free_cny" => "free",
+        "granted_cny" | "granted_usd" => "granted",
+        "topped_up_cny" | "topped_up_usd" => "topped-up",
+        "credits_usd" => "credits",
+        "key_limit_usd" => "key limit",
         other => other,
     };
     if !show_headers {

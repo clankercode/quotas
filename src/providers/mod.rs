@@ -1,7 +1,10 @@
 pub mod claude;
 pub mod codex;
+pub mod deepseek;
 pub mod kimi;
 pub mod minimax;
+pub mod openrouter;
+pub mod siliconflow;
 pub mod zai;
 
 use crate::auth::AuthResolver;
@@ -17,6 +20,9 @@ pub enum ProviderKind {
     Minimax,
     Zai,
     Kimi,
+    DeepSeek,
+    SiliconFlow,
+    OpenRouter,
 }
 
 impl ProviderKind {
@@ -27,6 +33,9 @@ impl ProviderKind {
             ProviderKind::Minimax => "MiniMax",
             ProviderKind::Zai => "Z.ai",
             ProviderKind::Kimi => "Kimi",
+            ProviderKind::DeepSeek => "DeepSeek",
+            ProviderKind::SiliconFlow => "SiliconFlow",
+            ProviderKind::OpenRouter => "OpenRouter",
         }
     }
 
@@ -37,6 +46,9 @@ impl ProviderKind {
             ProviderKind::Minimax => "minimax",
             ProviderKind::Zai => "zai",
             ProviderKind::Kimi => "kimi",
+            ProviderKind::DeepSeek => "deepseek",
+            ProviderKind::SiliconFlow => "siliconflow",
+            ProviderKind::OpenRouter => "openrouter",
         }
     }
 
@@ -47,6 +59,9 @@ impl ProviderKind {
             ProviderKind::Minimax,
             ProviderKind::Zai,
             ProviderKind::Kimi,
+            ProviderKind::DeepSeek,
+            ProviderKind::SiliconFlow,
+            ProviderKind::OpenRouter,
         ]
     }
 }

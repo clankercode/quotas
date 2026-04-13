@@ -60,8 +60,10 @@ impl ProviderCard {
                 if let Some(w) = quota.windows.first() {
                     if w.limit > 0 {
                         lines.push(format!("{}/{} remaining", w.remaining, w.limit));
-                    } else if w.window_type == "payg_balance" {
-                        lines.push(format!("${:.2} balance", w.remaining as f64 / 100.0));
+                    } else if let Some((sym, scale)) =
+                        crate::tui::bar::currency_window(&w.window_type)
+                    {
+                        lines.push(format!("{}{:.2} balance", sym, w.remaining as f64 / scale));
                     }
                     if let Some(reset) = w.reset_at {
                         lines.push(format!("resets {}", reset.format("%b %d %H:%M")));

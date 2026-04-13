@@ -398,7 +398,7 @@ impl Dashboard {
                     let visible = quota
                         .windows
                         .iter()
-                        .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
+                        .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
                         .count();
                     // 2 border + 1 header (name+freshness) + 1 plan name
                     let fixed: u16 = 4;
@@ -427,7 +427,7 @@ impl Dashboard {
                     let visible = quota
                         .windows
                         .iter()
-                        .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
+                        .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
                         .count()
                         .max(1) as u32;
                     // Minimax renders 5h/7d pairs on one line, so its
@@ -534,7 +534,7 @@ impl Dashboard {
                 let mut visible: Vec<&QuotaWindow> = quota
                     .windows
                     .iter()
-                    .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
+                    .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
                     .collect();
                 visible.sort_by_key(|w| bar::window_sort_key(w));
                 let total = visible.len();
@@ -572,11 +572,12 @@ impl Dashboard {
                     }
 
                     let label_src = bar::display_label(&w.window_type, show_headers);
-                    if w.window_type == "payg_balance" {
+                    if let Some((sym, scale)) = bar::currency_window(&w.window_type) {
                         lines.push(Line::from(vec![Span::raw(format!(
-                            "{:<width$} ${:.2}",
+                            "{:<width$} {}{:.2}",
                             label_src,
-                            w.remaining as f64 / 100.0,
+                            sym,
+                            w.remaining as f64 / scale,
                             width = label_w
                         ))]));
                         if matches!(mode, RenderMode::TwoLine) {
@@ -890,7 +891,7 @@ fn pace_badge(visible: &[&QuotaWindow]) -> Option<(String, Style)> {
     let mut worst_label = String::new();
     let mut worst_pct: f64 = 0.0;
     for w in visible {
-        if w.window_type == "payg_balance" {
+        if bar::currency_window(&w.window_type).is_some() {
             continue;
         }
         let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);

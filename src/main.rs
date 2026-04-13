@@ -126,6 +126,42 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
+        ProviderKind::DeepSeek => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![("DEEPSEEK_API_KEY", "deepseek")])),
+                Box::new(FileResolver::new(
+                    vec![dirs::home_dir().unwrap_or_default().join(".deepseek")],
+                    parse_key_file,
+                    "deepseek",
+                )),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
+        ProviderKind::SiliconFlow => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![
+                    ("SILICONFLOW_API_KEY", "siliconflow"),
+                    ("SILICON_FLOW_API_KEY", "siliconflow"),
+                ])),
+                Box::new(FileResolver::new(
+                    vec![dirs::home_dir().unwrap_or_default().join(".siliconflow")],
+                    parse_key_file,
+                    "siliconflow",
+                )),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
+        ProviderKind::OpenRouter => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![("OPENROUTER_API_KEY", "openrouter")])),
+                Box::new(FileResolver::new(
+                    vec![dirs::home_dir().unwrap_or_default().join(".openrouter")],
+                    parse_key_file,
+                    "openrouter",
+                )),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
     }
 }
 
@@ -141,6 +177,9 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
             "minimax" => Some(ProviderKind::Minimax),
             "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
             "kimi" | "moonshot" => Some(ProviderKind::Kimi),
+            "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
+            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
+            "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
             _ => None,
         })
         .collect()
@@ -190,6 +229,15 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
         ),
         ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
         ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
+        ProviderKind::DeepSeek => {
+            Box::new(quotas::providers::deepseek::DeepSeekProvider::new(auth))
+        }
+        ProviderKind::SiliconFlow => {
+            Box::new(quotas::providers::siliconflow::SiliconFlowProvider::new(auth))
+        }
+        ProviderKind::OpenRouter => {
+            Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
+        }
     };
     match provider.fetch().await {
         Ok(r) => r,
