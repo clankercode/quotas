@@ -12,6 +12,21 @@ use serde::{Deserialize, Serialize};
 pub enum AuthCredential {
     Bearer(String),
     Token(String),
+    Cookie(String),
+}
+
+impl AuthCredential {
+    /// Extract the bearer/token string. Returns an error for cookie
+    /// credentials (which need to be sent as a Cookie header, not
+    /// Authorization).
+    pub fn unwrap_token(&self) -> Result<&str> {
+        match self {
+            AuthCredential::Bearer(s) | AuthCredential::Token(s) => Ok(s.as_str()),
+            AuthCredential::Cookie(_) => Err(Error::Auth(
+                "cookie credential cannot be used as bearer token".into(),
+            )),
+        }
+    }
 }
 
 pub struct ResolvedAuth {

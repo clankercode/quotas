@@ -7,7 +7,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use quotas::auth::env::EnvResolver;
-use quotas::auth::file::FileResolver;
+use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::refresh;
@@ -192,6 +192,15 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
         }
         ProviderKind::Mimo => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(CookieFileResolver::new(
+                    vec![
+                        dirs::home_dir()
+                            .unwrap_or_default()
+                            .join(".config/mimo/cookie"),
+                        dirs::home_dir().unwrap_or_default().join(".mimo-cookie"),
+                    ],
+                    "mimo-cookie",
+                )),
                 Box::new(EnvResolver::new(vec![
                     ("XIAOMI_MIMO_API_KEY", "xiaomi_mimo"),
                     ("XIAOMI_API_KEY", "xiaomi"),

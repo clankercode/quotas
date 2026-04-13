@@ -8,13 +8,16 @@ use serde::Deserialize;
 
 /// Xiaomi MiMo API provider.
 ///
-/// Two base URLs exist:
-///   - PAYG (pay-as-you-go): https://api.xiaomimimo.com/v1
-///   - Token Plan (monthly subscription, SGP region): https://token-plan-sgp.xiaomimimo.com/v1
+/// Three sources of quota data:
+///   - Platform dashboard (cookie auth): https://platform.xiaomimimo.com/api/v1/tokenPlan/usage
+///   - PAYG (bearer): https://api.xiaomimimo.com/v1/user/balance
+///   - Token Plan SGP (bearer): https://token-plan-sgp.xiaomimimo.com/v1/user/balance
 ///
-/// We try both for balance; whichever returns a successful 2xx response wins.
+/// Cookie auth is tried first when available (it gives monthly token usage);
+/// bearer endpoints are tried as fallback or when only an API key is configured.
 const PAYG_BASE: &str = "https://api.xiaomimimo.com/v1";
 const TOKEN_PLAN_BASE: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
+const PLATFORM_USAGE: &str = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage";
 const DASHBOARD_URL: &str = "https://platform.xiaomimimo.com";
 
 pub struct MimoProvider {
@@ -30,28 +33,53 @@ impl MimoProvider {
         }
     }
 
-    /// Try a JSON endpoint; returns None if the response body isn't JSON (e.g. HTML 404 from nginx).
-    async fn try_json(&self, key: &str, url: &str) -> Result<Option<(u16, serde_json::Value)>> {
+    /// Try a JSON endpoint with cookie auth.
+    async fn try_json_cookie(
+        &self,
+        cookie: &str,
+        url: &str,
+    ) -> Result<Option<(u16, serde_json::Value)>> {
         let resp = self
             .http
             .get(url)
-            .header("Authorization", format!("Bearer {}", key))
+            .header("Cookie", format!("api-platform_serviceToken=\"{cookie}\""))
+            .header("accept", "application/json")
+            .header("accept-language", "en")
             .send()
             .await?;
         let status = resp.status().as_u16();
         let text = resp.text().await?;
         match serde_json::from_str::<serde_json::Value>(&text) {
             Ok(body) => Ok(Some((status, body))),
-            Err(_) => Ok(None), // HTML / non-JSON response — treat as absent endpoint
+            Err(_) => Ok(None),
         }
     }
 
-    /// Verify the API key is valid by calling /v1/models. Returns the base URL
-    /// that accepted the key, or None if auth failed on both.
+    /// Try a JSON endpoint with bearer auth.
+    async fn try_json_bearer(
+        &self,
+        key: &str,
+        url: &str,
+    ) -> Result<Option<(u16, serde_json::Value)>> {
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", format!("Bearer {key}"))
+            .send()
+            .await?;
+        let status = resp.status().as_u16();
+        let text = resp.text().await?;
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(body) => Ok(Some((status, body))),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Verify the bearer API key is valid by calling /v1/models. Returns the
+    /// base URL that accepted the key, or None if auth failed on both.
     async fn detect_base_url(&self, key: &str) -> Result<Option<&'static str>> {
-        // Token Plan first — user signed up for the pro plan.
         for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
-            if let Some((status, _)) = self.try_json(key, &format!("{}/models", base)).await? {
+            if let Some((status, _)) = self.try_json_bearer(key, &format!("{base}/models")).await? {
                 if status == 200 {
                     return Ok(Some(base));
                 }
@@ -60,11 +88,70 @@ impl MimoProvider {
         Ok(None)
     }
 
-    async fn fetch_balance(&self, key: &str) -> Result<ProviderResult> {
-        // Try balance endpoint on Token Plan first, then PAYG.
+    /// Fetch via platform dashboard cookie auth.
+    async fn fetch_platform(&self, cookie: &str) -> Result<Option<ProviderResult>> {
+        let Some((status, body)) = self.try_json_cookie(cookie, PLATFORM_USAGE).await? else {
+            return Ok(None);
+        };
+
+        if status == 401 || status == 403 {
+            return Ok(Some(ProviderResult {
+                kind: ProviderKind::Mimo,
+                status: ProviderStatus::Unavailable {
+                    info: crate::providers::UnavailableInfo {
+                        reason: "Cookie expired — refresh from browser".to_string(),
+                        console_url: Some(DASHBOARD_URL.into()),
+                    },
+                },
+                fetched_at: Utc::now(),
+                raw_response: Some(body),
+                auth_source: None,
+            }));
+        }
+
+        if status >= 400 {
+            return Ok(None);
+        }
+
+        // Check for code != 0 error in the body.
+        if let Some(code) = body.get("code").and_then(|v| v.as_i64()) {
+            if code != 0 {
+                let msg = body
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                return Ok(Some(ProviderResult {
+                    kind: ProviderKind::Mimo,
+                    status: ProviderStatus::Unavailable {
+                        info: crate::providers::UnavailableInfo {
+                            reason: msg.to_string(),
+                            console_url: Some(DASHBOARD_URL.into()),
+                        },
+                    },
+                    fetched_at: Utc::now(),
+                    raw_response: Some(body),
+                    auth_source: None,
+                }));
+            }
+        }
+
+        match parse_platform_usage(&body) {
+            Ok(quota) => Ok(Some(ProviderResult {
+                kind: ProviderKind::Mimo,
+                status: ProviderStatus::Available { quota },
+                fetched_at: Utc::now(),
+                raw_response: Some(body),
+                auth_source: None,
+            })),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Fetch via bearer API key (PAYG or Token Plan SGP endpoints).
+    async fn fetch_bearer(&self, key: &str) -> Result<ProviderResult> {
         for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
             if let Some((status, body)) = self
-                .try_json(key, &format!("{}/user/balance", base))
+                .try_json_bearer(key, &format!("{base}/user/balance"))
                 .await?
             {
                 if status == 401 || status == 403 {
@@ -97,44 +184,36 @@ impl MimoProvider {
                         auth_source: None,
                     });
                 }
-                // 4xx other than auth → keep trying other base URL
             }
-            // None = non-JSON (HTML 404) → keep trying
         }
 
         // No balance endpoint found on either URL. Verify auth is valid.
         match self.detect_base_url(key).await? {
-            Some(_base) => {
-                // Key works but there's no quota API.
-                Ok(ProviderResult {
-                    kind: ProviderKind::Mimo,
-                    status: ProviderStatus::Unavailable {
-                        info: crate::providers::UnavailableInfo {
-                            reason: "No quota API — check usage at platform.xiaomimimo.com"
-                                .to_string(),
-                            console_url: Some(DASHBOARD_URL.into()),
-                        },
+            Some(_base) => Ok(ProviderResult {
+                kind: ProviderKind::Mimo,
+                status: ProviderStatus::Unavailable {
+                    info: crate::providers::UnavailableInfo {
+                        reason: "No quota API — check usage at platform.xiaomimimo.com"
+                            .to_string(),
+                        console_url: Some(DASHBOARD_URL.into()),
                     },
-                    fetched_at: Utc::now(),
-                    raw_response: None,
-                    auth_source: None,
-                })
-            }
-            None => {
-                // Auth failed on both URLs.
-                Ok(ProviderResult {
-                    kind: ProviderKind::Mimo,
-                    status: ProviderStatus::Unavailable {
-                        info: crate::providers::UnavailableInfo {
-                            reason: "Invalid API key".to_string(),
-                            console_url: Some(DASHBOARD_URL.into()),
-                        },
+                },
+                fetched_at: Utc::now(),
+                raw_response: None,
+                auth_source: None,
+            }),
+            None => Ok(ProviderResult {
+                kind: ProviderKind::Mimo,
+                status: ProviderStatus::Unavailable {
+                    info: crate::providers::UnavailableInfo {
+                        reason: "Invalid API key".to_string(),
+                        console_url: Some(DASHBOARD_URL.into()),
                     },
-                    fetched_at: Utc::now(),
-                    raw_response: None,
-                    auth_source: None,
-                })
-            }
+                },
+                fetched_at: Utc::now(),
+                raw_response: None,
+                auth_source: None,
+            }),
         }
     }
 }
@@ -169,6 +248,50 @@ fn parse_f64(v: &serde_json::Value) -> f64 {
         serde_json::Value::String(s) => s.parse().unwrap_or(0.0),
         _ => 0.0,
     }
+}
+
+fn parse_i64(v: &serde_json::Value) -> i64 {
+    match v {
+        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0),
+        serde_json::Value::String(s) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Parse the platform dashboard response:
+/// `{ "data": { "monthUsage": { "items": [{ "name": "month_total_token", "used": N, "limit": N }] } } }`
+pub(crate) fn parse_platform_usage(body: &serde_json::Value) -> Result<ProviderQuota> {
+    let items = body
+        .pointer("/data/monthUsage/items")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| crate::Error::Provider("missing data.monthUsage.items".into()))?;
+
+    let mut windows: Vec<QuotaWindow> = Vec::new();
+    for item in items {
+        let name = item
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("token")
+            .to_string();
+        let used = item.get("used").map(parse_i64).unwrap_or(0);
+        let limit = item.get("limit").map(parse_i64).unwrap_or(0);
+        if limit > 0 {
+            windows.push(QuotaWindow {
+                window_type: name,
+                used,
+                limit,
+                remaining: (limit - used).max(0),
+                reset_at: None,
+                period_seconds: Some(30 * 24 * 3600),
+            });
+        }
+    }
+
+    Ok(ProviderQuota {
+        plan_name: "MiMo · Token Plan".into(),
+        windows,
+        unlimited: false,
+    })
 }
 
 pub(crate) fn parse_balance(body: &serde_json::Value, base: &str) -> Result<ProviderQuota> {
@@ -263,22 +386,24 @@ impl crate::providers::Provider for MimoProvider {
 
     async fn fetch(&self) -> Result<ProviderResult> {
         let auth = self.auth.resolve().await?;
-        let key = match &auth.credential {
-            AuthCredential::Bearer(k) => k.clone(),
-            AuthCredential::Token(t) => t.clone(),
-        };
 
-        match self.fetch_balance(&key).await {
-            Ok(r) => Ok(r),
-            Err(e) => Ok(ProviderResult {
-                kind: ProviderKind::Mimo,
-                status: ProviderStatus::NetworkError {
-                    message: e.to_string(),
-                },
-                fetched_at: Utc::now(),
-                raw_response: None,
-                auth_source: None,
-            }),
+        match &auth.credential {
+            AuthCredential::Cookie(cookie) => {
+                // Cookie auth: try platform API first, then fall back to bearer.
+                if let Some(result) = self.fetch_platform(cookie).await? {
+                    return Ok(result);
+                }
+                // Cookie didn't work — try bearer endpoints if possible.
+                // (Platform cookie is usually the only credential, so this is
+                // just a safety net.)
+                Err(crate::Error::Auth(
+                    "platform cookie auth returned no data".into(),
+                ))
+            }
+            AuthCredential::Bearer(key) | AuthCredential::Token(key) => {
+                // Bearer auth: try PAYG / Token Plan SGP endpoints.
+                self.fetch_bearer(key).await
+            }
         }
     }
 
@@ -333,5 +458,31 @@ mod tests {
         let body = serde_json::json!({ "data": {} });
         let quota = parse_balance(&body, PAYG_BASE).unwrap();
         assert!(quota.windows.is_empty());
+    }
+
+    #[test]
+    fn parses_platform_month_usage() {
+        let body = serde_json::json!({
+            "code": 0,
+            "message": "",
+            "data": {
+                "monthUsage": {
+                    "percent": 0.1661,
+                    "items": [{
+                        "name": "month_total_token",
+                        "used": 265741632,
+                        "limit": 1600000000,
+                        "percent": 0.1661
+                    }]
+                }
+            }
+        });
+        let quota = parse_platform_usage(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiMo · Token Plan");
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0].window_type, "month_total_token");
+        assert_eq!(quota.windows[0].used, 265741632);
+        assert_eq!(quota.windows[0].limit, 1600000000);
+        assert_eq!(quota.windows[0].remaining, 1600000000 - 265741632);
     }
 }

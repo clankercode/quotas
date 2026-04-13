@@ -184,13 +184,9 @@ impl crate::providers::Provider for ClaudeProvider {
 
     async fn fetch(&self) -> Result<ProviderResult> {
         let auth = self.auth.resolve().await?;
-        let (token, is_oauth) = match &auth.credential {
-            AuthCredential::Token(t) => (t.clone(), true),
-            AuthCredential::Bearer(k) => {
-                let is_oauth = k.starts_with("sk-ant-oat");
-                (k.clone(), is_oauth)
-            }
-        };
+        let token = auth.credential.unwrap_token()?.to_string();
+        let is_oauth = matches!(&auth.credential, AuthCredential::Token(_))
+            || token.starts_with("sk-ant-oat");
 
         match self.fetch_usage(&token, is_oauth).await {
             Ok(r) => Ok(r),

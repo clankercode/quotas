@@ -18,6 +18,7 @@
 ## Bare-token files (first line = token, or key=value)
 
 [x] MiniMax                 ~/.minimax                               -> minimax
+[x] MiMo cookie             ~/.config/mimo/cookie, ~/.mimo-cookie    -> mimo  (platform.xiaomimimo.com session)
 [x] Z.ai / GLM              ~/.api-zai                               -> zai
 [x] Kimi / Moonshot         ~/.moonshot, ~/.kimi                     -> kimi
 

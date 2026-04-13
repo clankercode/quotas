@@ -1,4 +1,4 @@
-use crate::auth::{AuthCredential, AuthResolver, MultiResolver};
+use crate::auth::{AuthResolver, MultiResolver};
 use crate::providers::{ProviderKind, ProviderQuota, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::{Error, Result};
 use async_trait::async_trait;
@@ -202,10 +202,7 @@ impl crate::providers::Provider for MinimaxProvider {
 
     async fn fetch(&self) -> Result<ProviderResult> {
         let auth = self.auth.resolve().await?;
-        let key = match &auth.credential {
-            AuthCredential::Bearer(k) => k.clone(),
-            AuthCredential::Token(t) => t.clone(),
-        };
+        let key = auth.credential.unwrap_token()?.to_string();
 
         match self.fetch_intl(&key).await {
             Ok(mut r) => {

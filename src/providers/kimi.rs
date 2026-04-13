@@ -1,4 +1,4 @@
-use crate::auth::{AuthCredential, AuthResolver};
+use crate::auth::AuthResolver;
 use crate::providers::{ProviderKind, ProviderQuota, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::Result;
 use async_trait::async_trait;
@@ -237,10 +237,7 @@ impl crate::providers::Provider for KimiProvider {
 
     async fn fetch(&self) -> Result<ProviderResult> {
         let auth = self.auth.resolve().await?;
-        let key = match &auth.credential {
-            AuthCredential::Bearer(k) => k.clone(),
-            AuthCredential::Token(t) => t.clone(),
-        };
+        let key = auth.credential.unwrap_token()?.to_string();
 
         match self.fetch_coding(&key).await {
             Ok(r) => Ok(r),

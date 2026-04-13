@@ -1,4 +1,4 @@
-use crate::auth::{AuthCredential, AuthResolver};
+use crate::auth::AuthResolver;
 use crate::providers::{ProviderKind, ProviderQuota, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::Result;
 use async_trait::async_trait;
@@ -230,10 +230,7 @@ impl crate::providers::Provider for CodexProvider {
 
     async fn fetch(&self) -> Result<ProviderResult> {
         let auth = self.auth.resolve().await?;
-        let token = match &auth.credential {
-            AuthCredential::Bearer(k) => k.clone(),
-            AuthCredential::Token(t) => t.clone(),
-        };
+        let token = auth.credential.unwrap_token()?.to_string();
 
         let use_oauth =
             matches!(&auth.source[..], s if s.contains("oauth") || s.contains(".codex"));
