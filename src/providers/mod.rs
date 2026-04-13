@@ -2,6 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod deepseek;
 pub mod kimi;
+pub mod mimo;
 pub mod minimax;
 pub mod openrouter;
 pub mod siliconflow;
@@ -23,6 +24,7 @@ pub enum ProviderKind {
     DeepSeek,
     SiliconFlow,
     OpenRouter,
+    Mimo,
 }
 
 impl ProviderKind {
@@ -45,6 +47,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::SiliconFlow => "SiliconFlow",
             ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::Mimo => "MiMo",
         }
     }
 
@@ -58,6 +61,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::SiliconFlow => "siliconflow",
             ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::Mimo => "mimo",
         }
     }
 
@@ -71,6 +75,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek,
             ProviderKind::SiliconFlow,
             ProviderKind::OpenRouter,
+            ProviderKind::Mimo,
         ]
     }
 }

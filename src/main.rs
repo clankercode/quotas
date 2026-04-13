@@ -165,6 +165,25 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
+        ProviderKind::Mimo => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![
+                    ("XIAOMI_MIMO_API_KEY", "xiaomi_mimo"),
+                    ("XIAOMI_API_KEY", "xiaomi"),
+                    ("MIMO_API_KEY", "mimo"),
+                ])),
+                Box::new(FileResolver::new(
+                    vec![
+                        dirs::home_dir().unwrap_or_default().join(".mimo-key"),
+                        dirs::home_dir().unwrap_or_default().join(".xiaomimimo"),
+                        dirs::home_dir().unwrap_or_default().join(".mimo"),
+                    ],
+                    parse_key_file,
+                    "mimo",
+                )),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
     }
 }
 
@@ -183,6 +202,7 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
             "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
             "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
+            "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
             _ => None,
         })
         .collect()
@@ -241,6 +261,7 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
         ProviderKind::OpenRouter => {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
+        ProviderKind::Mimo => Box::new(quotas::providers::mimo::MimoProvider::new(auth)),
     };
     // Pre-resolve to capture the auth source string for the detail view.
     // This is a lightweight re-resolve (env var / file read) after any token
