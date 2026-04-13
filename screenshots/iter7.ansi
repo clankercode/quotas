@@ -1,0 +1,60 @@
+[1m[38;5;15m QUOTA DETAIL [0m
+[2m ← → providers  ↑ ↓ scroll  Enter/Esc back  C copy  Q quit [0m
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  [1m[38;5;15mZ.ai[0m   [38;5;6mUpdated 10s ago[39m
+  [2;3mZ.ai max[0m
+
+  5h             [38;5;2m█[38;5;8m▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░[39m [1m[38;5;2m  2% used[0m
+                 [2m2 used · 98 left · 100 cap[0m
+                 [2mresets in 1h 58m · 2026-04-13 09:00 UTC[0m
+                 [38;5;2mpacing ahead — 2% used vs 61% time elapsed[39m
+
+  month MCP      [38;5;2m██████████████████████[38;5;8m▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░[39m [1m[38;5;2m 36% used[0m
+                 [2m1,451 used · 2,549 left · 4,000 cap[0m
+                 [2mresets in 17d 6h · 2026-04-30 13:20 UTC[0m
+                 [38;5;2mpacing ahead — 36% used vs 42% time elapsed[39m
+
+
+  [2m── raw response ──[0m
+  [2m{[0m
+  [2m  "code": 200,[0m
+  [2m  "data": {[0m
+  [2m    "level": "max",[0m
+  [2m    "limits": [[0m
+  [2m      {[0m
+  [2m        "currentValue": 1451,[0m
+  [2m        "nextResetTime": 1777555255998,[0m
+  [2m        "number": 1,[0m
+  [2m        "percentage": 36,[0m
+  [2m        "remaining": 2549,[0m
+  [2m        "type": "TIME_LIMIT",[0m
+  [2m        "unit": 5,[0m
+  [2m        "usage": 4000,[0m
+  [2m        "usageDetails": [[0m
+  [2m          {[0m
+  [2m            "modelCode": "search-prime",[0m
+  [2m            "usage": 592[0m
+  [2m          },[0m
+  [2m          {[0m
+  [2m            "modelCode": "web-reader",[0m
+  [2m            "usage": 859[0m
+  [2m          },[0m
+  [2m          {[0m
+  [2m            "modelCode": "zread",[0m
+  [2m            "usage": 0[0m
+  [2m          }[0m
+  [2m        ][0m
+  [2m      },[0m
+  [2m      {[0m
+  [2m        "nextResetTime": 1776070831572,[0m
+  [2m        "number": 5,[0m
+  [2m        "percentage": 2,[0m
+  [2m        "type": "TOKENS_LIMIT",[0m
+  [2m        "unit": 3[0m
+  [2m      }[0m
+  [2m    ][0m
+  [2m  },[0m
+  [2m  "msg": "Operation successful",[0m
+  [2m  "success": true[0m
+

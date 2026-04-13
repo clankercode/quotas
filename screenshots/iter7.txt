@@ -1,0 +1,60 @@
+ QUOTA DETAIL
+ ← → providers  ↑ ↓ scroll  Enter/Esc back  C copy  Q quit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Z.ai   Updated 10s ago
+  Z.ai max
+
+  5h             █▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░   2% used
+                 2 used · 98 left · 100 cap
+                 resets in 1h 58m · 2026-04-13 09:00 UTC
+                 pacing ahead — 2% used vs 61% time elapsed
+
+  month MCP      ██████████████████████▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  36% used
+                 1,451 used · 2,549 left · 4,000 cap
+                 resets in 17d 6h · 2026-04-30 13:20 UTC
+                 pacing ahead — 36% used vs 42% time elapsed
+
+
+  ── raw response ──
+  {
+    "code": 200,
+    "data": {
+      "level": "max",
+      "limits": [
+        {
+          "currentValue": 1451,
+          "nextResetTime": 1777555255998,
+          "number": 1,
+          "percentage": 36,
+          "remaining": 2549,
+          "type": "TIME_LIMIT",
+          "unit": 5,
+          "usage": 4000,
+          "usageDetails": [
+            {
+              "modelCode": "search-prime",
+              "usage": 592
+            },
+            {
+              "modelCode": "web-reader",
+              "usage": 859
+            },
+            {
+              "modelCode": "zread",
+              "usage": 0
+            }
+          ]
+        },
+        {
+          "nextResetTime": 1776070831572,
+          "number": 5,
+          "percentage": 2,
+          "type": "TOKENS_LIMIT",
+          "unit": 3
+        }
+      ]
+    },
+    "msg": "Operation successful",
+    "success": true
+

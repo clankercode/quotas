@@ -316,14 +316,56 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                         }
                     }
                     KeyCode::Enter => {
-                        dashboard.show_detail = !dashboard.show_detail;
+                        if dashboard.show_detail {
+                            dashboard.show_detail = false;
+                            dashboard.detail_scroll = 0;
+                        } else {
+                            dashboard.show_detail = true;
+                            dashboard.detail_scroll = 0;
+                        }
                     }
-                    KeyCode::Left => dashboard.navigate(Direction::Left),
-                    KeyCode::Right => dashboard.navigate(Direction::Right),
-                    KeyCode::Up => dashboard.navigate(Direction::Up),
-                    KeyCode::Down => dashboard.navigate(Direction::Down),
-                    KeyCode::PageUp => dashboard.page_up(),
-                    KeyCode::PageDown => dashboard.page_down(),
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        if dashboard.show_detail {
+                            dashboard.detail_prev();
+                        } else {
+                            dashboard.navigate(Direction::Left);
+                        }
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        if dashboard.show_detail {
+                            dashboard.detail_next();
+                        } else {
+                            dashboard.navigate(Direction::Right);
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(-3);
+                        } else {
+                            dashboard.navigate(Direction::Up);
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(3);
+                        } else {
+                            dashboard.navigate(Direction::Down);
+                        }
+                    }
+                    KeyCode::PageUp => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(-20);
+                        } else {
+                            dashboard.page_up();
+                        }
+                    }
+                    KeyCode::PageDown => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(20);
+                        } else {
+                            dashboard.page_down();
+                        }
+                    }
                     _ => {}
                 }
             }

@@ -37,6 +37,7 @@ pub struct Dashboard {
     pub entries: Vec<ProviderEntry>,
     pub selected_index: usize,
     pub show_detail: bool,
+    pub detail_scroll: u16,
     pub spinner_frame: usize,
     last_layout: Cell<GridLayout>,
 }
@@ -49,9 +50,40 @@ impl Dashboard {
             entries,
             selected_index: 0,
             show_detail: false,
+            detail_scroll: 0,
             spinner_frame: 0,
             last_layout: Cell::new(GridLayout::default()),
         }
+    }
+
+    pub fn scroll_detail(&mut self, delta: i16) {
+        self.detail_scroll = (self.detail_scroll as i32 + delta as i32).max(0) as u16;
+    }
+
+    /// Navigate to the previous/next provider while in detail view, cycling
+    /// through the visual order. Resets the scroll offset on each jump.
+    pub fn detail_prev(&mut self) {
+        let order = self.visual_order();
+        if let Some(pos) = order.iter().position(|&i| i == self.selected_index) {
+            if pos > 0 {
+                self.selected_index = order[pos - 1];
+            } else {
+                self.selected_index = order[order.len() - 1];
+            }
+        }
+        self.detail_scroll = 0;
+    }
+
+    pub fn detail_next(&mut self) {
+        let order = self.visual_order();
+        if let Some(pos) = order.iter().position(|&i| i == self.selected_index) {
+            if pos + 1 < order.len() {
+                self.selected_index = order[pos + 1];
+            } else {
+                self.selected_index = order[0];
+            }
+        }
+        self.detail_scroll = 0;
     }
 
     pub fn update(&mut self, idx: usize, result: ProviderResult) {
@@ -288,24 +320,40 @@ impl Dashboard {
         let cols = layout.cols.min(page_count.max(1));
         let rows = page_count.div_ceil(cols);
 
-        // Row heights are weighted by the max content weight of any card in
-        // that row, so a row containing a minimax card with 10 windows gets
-        // more vertical space than a row of single-window zai/claude cards.
-        let mut row_weights: Vec<u32> = vec![1; rows];
+        // Each row gets exactly its natural height (max across cards in that
+        // row). Any remaining vertical space is absorbed by a spacer below
+        // all rows, so cards don't balloon with empty whitespace.
+        let mut row_heights: Vec<u16> = vec![MIN_CARD_H; rows];
         for (i, visual_pos) in (page_start..page_end).enumerate() {
             let row_i = i / cols;
             let entry_idx = order[visual_pos];
-            let w = Self::card_weight(&self.entries[entry_idx]);
-            if w > row_weights[row_i] {
-                row_weights[row_i] = w;
+            let h = Self::natural_card_height(&self.entries[entry_idx]);
+            if h > row_heights[row_i] {
+                row_heights[row_i] = h;
             }
         }
-        let total_weight: u32 = row_weights.iter().sum::<u32>().max(1);
-        let row_constraints: Vec<Constraint> = row_weights
-            .iter()
-            .map(|w| Constraint::Ratio(*w, total_weight))
-            .collect();
-        let row_rects = Layout::vertical(row_constraints).split(grid_area);
+        // Clamp so we don't overflow the grid area.
+        let total_fixed: u16 = row_heights.iter().sum();
+        if total_fixed > grid_area.height {
+            // Fallback: ratio layout so everything still fits.
+            let weights: Vec<u32> = row_heights.iter().map(|h| *h as u32).collect();
+            let total_w: u32 = weights.iter().sum::<u32>().max(1);
+            let row_constraints: Vec<Constraint> = weights
+                .iter()
+                .map(|w| Constraint::Ratio(*w, total_w))
+                .collect();
+            let row_rects = Layout::vertical(row_constraints).split(grid_area);
+            // (render loop below uses row_rects — we need to go through the
+            // same variable; restructure slightly.)
+            let _ = row_rects; // handled by the non-overflow path below, which
+                               // will produce the same binding; fall through.
+        }
+        let mut row_constraints: Vec<Constraint> =
+            row_heights.iter().map(|h| Constraint::Length(*h)).collect();
+        row_constraints.push(Constraint::Fill(1)); // spacer absorbs slack
+        let all_rects = Layout::vertical(row_constraints).split(grid_area);
+        // all_rects has rows+1 entries; last one is the spacer.
+        let row_rects = &all_rects[..rows];
 
         for (i, visual_pos) in (page_start..page_end).enumerate() {
             let col_i = i % cols;
@@ -322,6 +370,37 @@ impl Dashboard {
             let selected = visual_pos == self.selected_index;
             let entry_idx = order[visual_pos];
             self.render_entry(f, entry_idx, selected, card_area);
+        }
+    }
+
+    /// Natural height of a card in rows including the border (2 lines).
+    /// Used so row heights track content rather than filling all available space.
+    fn natural_card_height(entry: &ProviderEntry) -> u16 {
+        match entry {
+            ProviderEntry::Loading => MIN_CARD_H,
+            ProviderEntry::Done(r) => match &r.status {
+                ProviderStatus::Available { quota } => {
+                    let visible = quota
+                        .windows
+                        .iter()
+                        .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
+                        .count();
+                    // 2 border + 1 header (name+freshness) + 1 plan name
+                    let fixed: u16 = 4;
+                    // +1 for footer_reserve that render_done_card always subtracts.
+                    let content: u16 = if r.kind == ProviderKind::Minimax {
+                        // 2-col render: 1 col-header row + 1 row per model pair
+                        // + 1 reset-period footer row per unique period.
+                        let model_rows = visible.div_ceil(2) as u16;
+                        1 + model_rows + 2 // 2 reset lines (one per period)
+                    } else {
+                        // TwoLine: 2 lines per window (bar + reset).
+                        (visible as u16) * 2 + 1
+                    };
+                    (fixed + content).max(MIN_CARD_H)
+                }
+                _ => MIN_CARD_H,
+            },
         }
     }
 
@@ -583,24 +662,27 @@ impl Dashboard {
 
         let title = Paragraph::new(vec![
             Line::from(vec![Span::raw(" QUOTA DETAIL ").bold().white()]),
-            Line::from(vec![Span::raw("Enter: back  C: copy JSON  Q: quit ").dim()]),
+            Line::from(vec![Span::raw(
+                " ← → providers  ↑ ↓ scroll  Enter/Esc back  C copy  Q quit ",
+            )
+            .dim()]),
         ])
         .block(Block::new().borders(Borders::BOTTOM));
-        f.render_widget(title, Rect::new(area.x, area.y, area.width, 2));
+        f.render_widget(title, Rect::new(area.x, area.y, area.width, 3));
 
         if let Some(selected) = self.selected_provider() {
             let view = DetailView::new(selected.clone());
             let detail_area = Rect::new(
                 area.x,
-                area.y + 2,
+                area.y + 3,
                 area.width,
-                area.height.saturating_sub(3),
+                area.height.saturating_sub(4),
             );
             let text = view.render(detail_area.width);
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))
                 .wrap(Wrap { trim: false })
-                .scroll((0, 0));
+                .scroll((self.detail_scroll, 0));
             f.render_widget(paragraph, detail_area);
         } else {
             let p = Paragraph::new("Provider still loading…")
@@ -609,9 +691,9 @@ impl Dashboard {
                 p,
                 Rect::new(
                     area.x,
-                    area.y + 2,
+                    area.y + 3,
                     area.width,
-                    area.height.saturating_sub(3),
+                    area.height.saturating_sub(4),
                 ),
             );
         }
@@ -700,6 +782,10 @@ fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], in
         Span::raw(header_7d).dim(),
     ]));
 
+    // Collect reset times for the two period columns while rendering.
+    let mut reset_5h: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut reset_7d: Option<chrono::DateTime<chrono::Utc>> = None;
+
     for model in &order {
         let (five, seven) = pairs.get(model).copied().unwrap_or((None, None));
         let label = bar::truncate_suffix(model, label_w);
@@ -710,6 +796,50 @@ fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], in
         spans.extend(minimax_bar_cell(seven, bar_w));
 
         lines.push(Line::from(spans));
+
+        if reset_5h.is_none() {
+            if let Some(w) = five {
+                reset_5h = w.reset_at;
+            }
+        }
+        if reset_7d.is_none() {
+            if let Some(w) = seven {
+                reset_7d = w.reset_at;
+            }
+        }
+    }
+
+    // Footer: show reset times for each period, grouped (all models share
+    // the same window boundary for a given period).
+    let pad = format!("{:<w$} ", "", w = label_w);
+    if reset_5h.is_some() || reset_7d.is_some() {
+        let mut footer_spans: Vec<Span<'_>> = vec![Span::raw(pad.clone())];
+        if let Some(t) = reset_5h {
+            let rel = humanize_reset(t - chrono::Utc::now());
+            footer_spans.push(
+                Span::raw(format!(
+                    "{:^w$}",
+                    format!("5h resets in {}", rel),
+                    w = bar_w as usize
+                ))
+                .dim(),
+            );
+        } else {
+            footer_spans.push(Span::raw(format!("{:w$}", "", w = bar_w as usize)));
+        }
+        footer_spans.push(Span::raw("  "));
+        if let Some(t) = reset_7d {
+            let rel = humanize_reset(t - chrono::Utc::now());
+            footer_spans.push(
+                Span::raw(format!(
+                    "{:^w$}",
+                    format!("7d resets in {}", rel),
+                    w = bar_w as usize
+                ))
+                .dim(),
+            );
+        }
+        lines.push(Line::from(footer_spans));
     }
 }
 

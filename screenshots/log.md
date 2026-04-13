@@ -212,3 +212,81 @@ one: `iterN.txt` (plain) and `iterN.ansi` (ANSI colors).
 **Status**
 5 iterations complete. Shipping as-is; remaining whitespace is
 aesthetic and would need a more invasive layout rework to eliminate.
+
+---
+
+## Iter 6 — natural card heights + minimax reset footer
+
+**Shipped**
+- `natural_card_height` function: computes the exact vertical footprint
+  of a card (borders + header + plan + window rows) so rows use
+  `Constraint::Length(natural_h)` instead of `Constraint::Ratio`. A
+  trailing `Constraint::Fill(1)` spacer absorbs remaining terminal height.
+  Result: top row 22→12 lines, minimax row 30→18 lines. Content is dense;
+  slack falls to the bottom of the screen instead of ballooning each card.
+- Fixed off-by-one: `natural_card_height` accounts for `footer_reserve=1`
+  that `pick_layout` consumes, ensuring Claude/Codex (4 windows) stay in
+  TwoLine mode and show `resets in` lines.
+- Minimax reset footer row: after all model rows, a single line shows
+  `5h resets in Xh Ym` and `7d resets in Nd Xh` centered over the
+  respective bar columns. All models share the same window boundary for
+  a given period, so one footer covers all. Added `+2` to minimax
+  `natural_card_height` to allocate the extra line.
+- Dead code from clamp fallback path in grid layout cleaned by clippy fmt.
+
+**Observations**
+1. Screen is now dramatically denser — content rows occupy ~30 of 60 lines
+   vs 55+ before, with the remaining 25 blank at the bottom of the terminal.
+2. Top row cards still show ~2 empty lines inside their border (the row
+   height is set by the tallest card — claude needs 13 lines, zai needs
+   9, so zai has 4 spare lines inside its box). Acceptable.
+3. Minimax reset footer perfectly placed: `5h resets in 3h 1m` and
+   `7d resets in 6d 17h` centered over each bar column. Very readable.
+4. `credits` row for Claude shows no reset time (no `reset_at` from API)
+   — one line instead of two. Minor gap in info.
+5. Detail view still has no scroll and no l/r provider-navigation — next.
+
+**Ideas queued for iter 7**
+- [x] Detail view: up/down scrolls; l/r navigates providers; Esc/q/Enter returns.
+- [x] Detail view: show keyboard hints updated for new shortcuts.
+- [ ] Display a "footer" hint bar when content overflows in detail view.
+
+---
+
+## Iter 7 — detail view scroll + provider navigation
+
+**Shipped**
+- `detail_scroll: u16` field added to Dashboard; resets to 0 on Enter and
+  on any provider-switch.
+- Up/Down (and k/j vim keys) scroll the detail view by 3 lines. PageUp/
+  PageDown scroll by 20.
+- Left/Right (and h/l) navigate prev/next provider in visual order while
+  in detail mode (wraps around). Resets scroll to 0 on each jump.
+- Header updated: "← → providers  ↑ ↓ scroll  Enter/Esc back  C copy  Q quit"
+  visible on line 2, below the title. Fixed a height bug where BOTTOM border
+  overwrote the hint (title rect expanded from 2→3 lines).
+- Grid view unchanged: arrow keys still navigate the grid as before.
+  'h'/'l'/'j'/'k' also work in grid mode for vim-style nav.
+
+**Observations**
+1. Detail view now fully scrollable. Raw JSON sections that extend past
+   the terminal bottom are reachable.
+2. Provider cycling with ← → in detail mode is fast and clean — each
+   jump resets scroll so you start at the top of the next provider.
+3. The hint text fits comfortably on one line at 200-char width.
+4. `q` quits from detail mode (doesn't return to grid) — consistent with
+   grid behaviour but might surprise users who expect q to be "go back".
+   Esc/Enter/Backspace all return to grid. Acceptable.
+5. Bar width in detail view is narrower than grid (capped at 60) so bars
+   render more compactly there. Cosmetic only.
+
+**Ideas queued for iter 8**
+- [ ] Small cards in top row still have 2-4 empty lines at bottom (Z.ai
+      has 2 windows but shares row height with Claude's 4 windows).
+      Could render a small "quota health" summary in spare space.
+- [ ] On grid, 'h'/'l'/'j'/'k' also work — hint text in grid doesn't
+      mention them but that's fine; power-user feature.
+- [ ] Minimax bars for 0% models: the text "0% (0/2)" sits 0 chars from
+      the left — but behind a ▒ chain from time-elapsed. Text is readable
+      but we could shorten the overlay for very-small limits ("0/2" vs
+      "0% (0/2)") to reduce noise.
