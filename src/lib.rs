@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod config;
 pub mod output;
 pub mod providers;
 pub mod tui;

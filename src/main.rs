@@ -8,7 +8,9 @@ use quotas::auth::env::EnvResolver;
 use quotas::auth::file::FileResolver;
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
+use quotas::auth::refresh;
 use quotas::auth::{AuthResolver, MultiResolver};
+use quotas::config::Config;
 use quotas::output::json::JsonOutput;
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
 use quotas::tui::Dashboard;
@@ -139,7 +141,39 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
         .collect()
 }
 
-async fn fetch_one(kind: ProviderKind) -> ProviderResult {
+async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
+    if !config.auto_refresh.enabled {
+        return;
+    }
+    match kind {
+        ProviderKind::Kimi => {
+            let path = refresh::kimi_creds_path();
+            let _ = refresh::refresh_kimi_if_expired(&path).await;
+            if let Some(oc) = refresh::opencode_creds_path() {
+                // opencode "kimi-for-coding" is type:api today; nothing to refresh.
+                let _ = oc;
+            }
+        }
+        ProviderKind::Claude => {
+            let path = refresh::claude_creds_path();
+            let _ = refresh::refresh_claude_if_expired(&path).await;
+            if let Some(oc) = refresh::opencode_creds_path() {
+                let _ = refresh::refresh_opencode_anthropic_if_expired(&oc).await;
+            }
+        }
+        ProviderKind::Codex => {
+            let path = refresh::codex_creds_path();
+            let _ = refresh::refresh_codex_if_expired(&path).await;
+            if let Some(oc) = refresh::opencode_creds_path() {
+                let _ = refresh::refresh_opencode_openai_if_expired(&oc).await;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
+    maybe_refresh_creds(kind, config).await;
     let auth = build_auth_resolver(&kind);
     let provider: Box<dyn Provider> = match kind {
         ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
@@ -159,7 +193,7 @@ async fn fetch_one(kind: ProviderKind) -> ProviderResult {
     }
 }
 
-fn fetch_provider_sync(kind: ProviderKind) -> ProviderResult {
+fn fetch_provider_sync(kind: ProviderKind, config: &Config) -> ProviderResult {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -167,7 +201,7 @@ fn fetch_provider_sync(kind: ProviderKind) -> ProviderResult {
         Ok(rt) => rt,
         Err(e) => return network_error_result(kind, e.to_string()),
     };
-    rt.block_on(fetch_one(kind))
+    rt.block_on(fetch_one(kind, config))
 }
 
 fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
@@ -188,25 +222,30 @@ fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
     }
 }
 
-fn fetch_all(kinds: Vec<ProviderKind>) -> Vec<ProviderResult> {
-    kinds.into_iter().map(fetch_provider_sync).collect()
+fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
+    kinds
+        .into_iter()
+        .map(|k| fetch_provider_sync(k, config))
+        .collect()
 }
 
 fn spawn_fetches(
     rt: &tokio::runtime::Runtime,
     kinds: &[ProviderKind],
+    config: Config,
     tx: tokio::sync::mpsc::UnboundedSender<(usize, ProviderResult)>,
 ) {
     for (idx, kind) in kinds.iter().cloned().enumerate() {
         let tx = tx.clone();
+        let config = config.clone();
         rt.spawn(async move {
-            let result = fetch_one(kind).await;
+            let result = fetch_one(kind, &config).await;
             let _ = tx.send((idx, result));
         });
     }
 }
 
-fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
+fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
@@ -222,7 +261,7 @@ fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
-    spawn_fetches(&rt, &kinds, tx);
+    spawn_fetches(&rt, &kinds, config.clone(), tx);
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
@@ -240,7 +279,7 @@ fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
                         dashboard.reset_loading();
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                         rx = new_rx;
-                        spawn_fetches(&rt, &kinds, new_tx);
+                        spawn_fetches(&rt, &kinds, config.clone(), new_tx);
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         if let Some(selected) = dashboard.selected_provider() {
@@ -277,15 +316,16 @@ fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
 fn main() {
     let args = Args::parse();
     let kinds = filter_kinds(&args.provider);
+    let config = Config::load();
 
     if args.json {
-        let results = fetch_all(kinds);
+        let results = fetch_all(kinds, &config);
         let output = JsonOutput::from_results(results);
         println!("{}", output.to_json(args.pretty));
         return;
     }
 
-    if let Err(e) = run_tui(kinds.clone()) {
+    if let Err(e) = run_tui(kinds.clone(), config) {
         eprintln!("Error: {:?}", e);
     }
 }

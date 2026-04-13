@@ -1,6 +1,6 @@
 [package]
 name = "quotas"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "CLI that auto-detects AI provider credentials (Claude, Codex, MiniMax, Kimi, Z.ai) and shows your usage quotas in a TUI or JSON."
 license = "MIT OR Apache-2.0"
@@ -24,6 +24,8 @@ chrono = { version = "0.4", features = ["serde"] }
 arboard = "3"
 url = "2"
 async-trait = "0.1"
+toml = "0.8"
+gethostname = "0.5"
 
 ratatui = "0.26"
 crossterm = "0.27"

@@ -102,6 +102,26 @@ impl KimiProvider {
     }
 }
 
+/// Some fields come back as strings ("100") or as integers (100). Accept either.
+fn num_field(v: &serde_json::Value, key: &str) -> i64 {
+    match v.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0),
+        Some(serde_json::Value::String(s)) => s.parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn parse_reset(v: &serde_json::Value) -> Option<DateTime<Utc>> {
+    let s = v
+        .get("reset_at")
+        .or_else(|| v.get("resetTime"))
+        .or_else(|| v.get("resetAt"))
+        .and_then(|x| x.as_str())?;
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
 pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
     let usage = body.get("usage").cloned().unwrap_or_default();
     let limits = body
@@ -112,16 +132,14 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
 
     let mut windows = Vec::new();
 
-    let weekly_limit = usage.get("limit").and_then(|v| v.as_i64()).unwrap_or(0);
-    let weekly_used = usage.get("used").and_then(|v| v.as_i64()).unwrap_or(0);
-    let weekly_remaining = usage
-        .get("remaining")
-        .and_then(|v| v.as_i64())
-        .unwrap_or_else(|| (weekly_limit - weekly_used).max(0));
-    let reset_at_str = usage.get("reset_at").and_then(|v| v.as_str());
-    let reset_at = reset_at_str
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc));
+    let weekly_limit = num_field(&usage, "limit");
+    let weekly_used = num_field(&usage, "used");
+    let weekly_remaining = if usage.get("remaining").is_some() {
+        num_field(&usage, "remaining")
+    } else {
+        (weekly_limit - weekly_used).max(0)
+    };
+    let reset_at = parse_reset(&usage);
 
     if weekly_limit > 0 {
         windows.push(QuotaWindow {
@@ -136,43 +154,51 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
     for limit_entry in limits {
         let detail = limit_entry.get("detail").cloned().unwrap_or_default();
         let window = limit_entry.get("window").cloned().unwrap_or_default();
-        let limit = detail.get("limit").and_then(|v| v.as_i64()).unwrap_or(0);
-        let used = detail
-            .get("used")
+        let limit = num_field(&detail, "limit");
+        let used = if detail.get("used").is_some() {
+            num_field(&detail, "used")
+        } else {
+            let remaining = num_field(&detail, "remaining");
+            (limit - remaining).max(0)
+        };
+        let remaining = if detail.get("remaining").is_some() {
+            num_field(&detail, "remaining")
+        } else {
+            (limit - used).max(0)
+        };
+        let duration = window
+            .get("duration")
             .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| {
-                let remaining = detail
-                    .get("remaining")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(0);
-                (limit - remaining).max(0)
-            });
-        let remaining = detail
-            .get("remaining")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| (limit - used).max(0));
-        let duration = window.get("duration").and_then(|v| v.as_i64()).unwrap_or(0);
+            .or_else(|| {
+                window
+                    .get("duration")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or(0);
         let unit = window
             .get("timeUnit")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let unit_norm = unit.trim_start_matches("TIME_UNIT_");
 
-        let window_type = match (duration, unit) {
-            (300, "MINUTE") => "5h".to_string(),
+        let window_type = match (duration, unit_norm) {
+            (300, u) if u == "MINUTE" => "5h".to_string(),
             (0, _) => detail
                 .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("window")
                 .to_string(),
-            _ => format!("{}{}", duration, unit.chars().next().unwrap_or(' ')),
+            _ => format!("{}{}", duration, unit_norm.chars().next().unwrap_or(' ')),
         };
 
+        let entry_reset = parse_reset(&detail);
         windows.push(QuotaWindow {
             window_type,
             used,
             limit,
             remaining,
-            reset_at: None,
+            reset_at: entry_reset,
         });
     }
 
