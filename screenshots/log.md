@@ -281,12 +281,47 @@ aesthetic and would need a more invasive layout rework to eliminate.
    render more compactly there. Cosmetic only.
 
 **Ideas queued for iter 8**
-- [ ] Small cards in top row still have 2-4 empty lines at bottom (Z.ai
+- [x] Small cards in top row still have 2-4 empty lines at bottom (Z.ai
       has 2 windows but shares row height with Claude's 4 windows).
       Could render a small "quota health" summary in spare space.
 - [ ] On grid, 'h'/'l'/'j'/'k' also work — hint text in grid doesn't
       mention them but that's fine; power-user feature.
-- [ ] Minimax bars for 0% models: the text "0% (0/2)" sits 0 chars from
-      the left — but behind a ▒ chain from time-elapsed. Text is readable
-      but we could shorten the overlay for very-small limits ("0/2" vs
-      "0% (0/2)") to reduce noise.
+- [x] Minimax label 20→24, short_model_name truncation removed.
+
+---
+
+## Iter 8 — pacing badge + minimax label width
+
+**Shipped**
+- `pace_badge(visible)` helper: scans visible windows for the worst
+  pace diff (used_pct - time_elapsed). If diff ≥ 0.08 → orange ⚡
+  badge "⚡ worst_label: X% — burning fast". If all windows ≤ -0.08
+  → green "✓ all pacing ahead". Neutral range → no badge (don't clutter).
+- Badge appears after all TwoLine window rows when total==shown_count
+  (all windows fit — no "+ N more" footer), on a blank separator line.
+- Minimax label column widened 20→24 chars.
+- `short_model_name` in minimax.rs: removed the hard 18-char truncation
+  (was a legacy limit from the old 12-char label column). Now
+  `truncate_suffix(model, 24)` in the dashboard handles display clipping.
+  `Hailuo-2.3-Fast-6s-768p` (22 chars) now shows in full.
+
+**Observations**
+1. Badge fires correctly: Kimi shows "✓ all pacing ahead" (both windows
+   ahead), Z.ai neutral (no badge), Codex neutral (45% used vs 48% elapsed
+   — just inside ±8% threshold), Claude unavailable (no badge).
+2. In this capture Claude was rate-limited → shows Unavailable card.
+   Visual-order sort moves it to first position (lowest weight = 5 for
+   Unavailable vs 6+ for available cards). Grid adapts cleanly.
+3. `Hailuo-2.3-Fast-6s-768p` now untruncated on minimax card. Full model
+   names visible across the board.
+4. Badge line sits on a blank separator so it visually reads as a footer
+   rather than another window row. Clean.
+5. Codex card has 1 trailing empty line inside the border (row height driven
+   by max card). Acceptable — trivial whitespace.
+
+**Ideas queued for iter 9**
+- [ ] Grid hint: add h/j/k/l mention or accept as power-user undocumented.
+- [ ] When badge fires for burning-fast, color the card header/border orange
+      as an alert indicator.
+- [ ] Credits window (claude extra_credits) has no reset_at — consider
+      displaying "no expiry" or just dropping the reset line.

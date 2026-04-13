@@ -189,13 +189,7 @@ fn short_model_name(name: &str) -> String {
         .strip_prefix("MiniMax-")
         .or_else(|| name.strip_prefix("minimax-"))
         .unwrap_or(name);
-    if s.chars().count() > 18 {
-        let mut out: String = s.chars().take(17).collect();
-        out.push('…');
-        out
-    } else {
-        s.to_string()
-    }
+    s.to_string()
 }
 
 #[async_trait]

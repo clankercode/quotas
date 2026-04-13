@@ -606,6 +606,17 @@ impl Dashboard {
                             .dim()
                             .italic(),
                     ));
+                } else if matches!(mode, RenderMode::TwoLine) {
+                    // All windows fit in TwoLine mode — there may be spare rows
+                    // (because row height = max across cards in the row). Use
+                    // one of them for a compact pacing badge.
+                    if let Some((badge_text, badge_style)) = pace_badge(&visible) {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled(badge_text, badge_style),
+                        ]));
+                    }
                 }
             }
             ProviderStatus::Unavailable { info } => {
@@ -766,7 +777,7 @@ fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], in
         return;
     }
 
-    let label_w: usize = 20;
+    let label_w: usize = 24;
     // Reserve: label + trailing space + gap between bars (2 chars).
     let reserved = label_w as u16 + 1 + 2;
     let avail = inner_w.saturating_sub(reserved);
@@ -853,6 +864,45 @@ fn minimax_bar_cell(win: Option<&QuotaWindow>, bar_w: u16) -> Vec<Span<'static>>
             bar::build_labeled(used_pct, time_elapsed, bar_w, color, &overlay)
         }
         _ => vec![Span::raw(format!("{:w$}", "", w = bar_w as usize))],
+    }
+}
+
+/// Returns a compact pacing summary badge for the bottom of a card when
+/// all windows are visible in TwoLine mode and spare rows exist.
+/// Returns None when the pace is neutral enough that a badge adds no signal.
+fn pace_badge(visible: &[&QuotaWindow]) -> Option<(String, Style)> {
+    let mut worst_diff: f64 = f64::NEG_INFINITY;
+    let mut worst_label = String::new();
+    let mut worst_pct: f64 = 0.0;
+    for w in visible {
+        if w.window_type == "payg_balance" {
+            continue;
+        }
+        let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
+        let Some(elapsed) = bar::time_elapsed_fraction(w) else {
+            continue;
+        };
+        let diff = used_pct - elapsed;
+        if diff > worst_diff {
+            worst_diff = diff;
+            worst_label = bar::display_label(&w.window_type, false);
+            worst_pct = used_pct;
+        }
+    }
+    if worst_diff == f64::NEG_INFINITY {
+        return None;
+    }
+    if worst_diff >= 0.08 {
+        let text = format!(
+            "⚡ {}: {:.0}% — burning fast",
+            bar::truncate_suffix(&worst_label, 10),
+            worst_pct * 100.0
+        );
+        Some((text, Style::new().fg(Color::Rgb(255, 140, 0))))
+    } else if worst_diff <= -0.08 {
+        Some(("✓ all pacing ahead".to_string(), Style::new().green().dim()))
+    } else {
+        None // neutral — don't clutter the card
     }
 }
 
