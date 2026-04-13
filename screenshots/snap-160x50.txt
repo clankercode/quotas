@@ -1,0 +1,50 @@
+ quotas
+ ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  Q Quit  · ▒ ahead  █ overspend
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│ ▶ Claude  Updated 11s ago           │ │   DeepSeek  Updated 11s ago         │ │   SiliconFlow  Updated 11s ago      │ │   OpenRouter  Updated 11s ago       │
+│ Unavailable: Rate limited. Please tr│ │ Auth required                       │ │ Auth required                       │ │ Auth required                       │
+│ https://claude.ai/settings/usage    │ │ Set API key in env or config        │ │ Set API key in env or config        │ │ Set API key in env or config        │
+│                                     │ │                                     │ │                                     │ │                                     │
+│                                     │ │                                     │ │                                     │ │                                     │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘ └─────────────────────────────────────┘ └─────────────────────────────────────┘
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│   Z.ai  Updated 10s ago             │ │   Kimi  Updated 10s ago             │ │   Codex  Updated 11s ago            │ │   MiniMax  Updated 10s ago          │
+│ Z.ai max                            │ │ Kimi Coding Plan                    │ │ Codex / ChatGPT pro                 │ │ MiniMax · MiniMax-M*                │
+│ 5h           3% (3/100)▒▒▒▒▒▒▒▒▒░░░ │ │ 5h           3% (3/100)░░░░░░░░░░░░ │ │ 5h           █34% (34/100)▒▒▒▒▒▒▒░░ │ │                ── 5h ──    ── 7d ── │
+│              resets in 36m          │ │              resets in 4h 13m       │ │              resets in 25m          │ │ M*            6% 841/15k  2%░░░░░░░░│
+│ month MCP    ██36% (1.5k/4k)░░░░░░░ │ │ 7d           5% (5/100)░░░░░░░░░░░░ │ │ 7d           ████47% (47/100)░░░░░░ │ │ …ing-plan-vlm 6% 841/15k  2%░░░░░░░░│
+│              resets in 17d 4h       │ │              resets in 5d 17h       │ │              resets in 3d 8h        │ │ …-plan-search 6% 841/15k  2%░░░░░░░░│
+│                                     │ │                                     │ │ spark/5h     0% (0/100)░░░░░░░░░░░░ │ │ speech-hd     ████49%░░░  7%░░░░░░░░│
+│                                     │ │  ✓ all pacing ahead                 │ │              resets in 4h 59m       │ │ …Fast-6s-768p 0% (0/2)░░  0% (0/14)░│
+│                                     │ │                                     │ │ spark/7d     1% (1/100)▒▒░░░░░░░░░░ │ │ …-2.3-6s-768p 0% (0/2)░░  0% (0/14)░│
+│                                     │ │                                     │ │              resets in 3d 2h        │ │ music-2.5     0% (0/4)░░  0% (0/28)░│
+│                                     │ │                                     │ │                                     │ │ music-2.6     0% (0/100)  0% (0/700)│
+│                                     │ │                                     │ │                                     │ │ music-cover   0% (0/100)  0% (0/700)│
+│                                     │ │                                     │ │                                     │ │ …s_generation 0% (0/100)  0% (0/700)│
+│                                     │ │                                     │ │                                     │ │ image-01      0% (0/120)  0% (0/840)│
+│                                     │ │                                     │ │                                     │ │               5h resets in 1h 36m  7│
+│                                     │ │                                     │ │                                     │ │                                     │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘ └─────────────────────────────────────┘ └─────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+8 of 8 providers loaded

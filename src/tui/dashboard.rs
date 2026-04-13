@@ -568,7 +568,7 @@ impl Dashboard {
                         Span::raw(" loading…").dim(),
                     ]),
                 ]);
-                let p = Paragraph::new(text).wrap(Wrap { trim: true });
+                let p = Paragraph::new(text);
                 f.render_widget(p, inner);
             }
             ProviderEntry::Refreshing(result) => {
@@ -608,17 +608,32 @@ impl Dashboard {
 
         let mut lines: Vec<Line> = Vec::new();
 
-        // Header line: name + freshness
-        lines.push(Line::from(vec![
-            Span::raw(format!(
-                "{} {}",
-                if selected { "▶" } else { " " },
-                card.display_name()
-            ))
-            .bold(),
-            Span::raw("  "),
-            Span::styled(freshness.label.clone(), freshness_style),
-        ]));
+        // Header line: name + freshness (truncate freshness to fit in one line).
+        let name_part = format!(
+            "{} {}",
+            if selected { "▶" } else { " " },
+            card.display_name()
+        );
+        let name_len = name_part.chars().count();
+        let avail_for_fresh = (inner.width as usize).saturating_sub(name_len + 2);
+        let fresh_str = &freshness.label;
+        let header_line = if avail_for_fresh == 0 {
+            Line::from(Span::raw(bar::truncate_suffix(&name_part, inner.width as usize)).bold())
+        } else if fresh_str.chars().count() <= avail_for_fresh {
+            Line::from(vec![
+                Span::raw(name_part).bold(),
+                Span::raw("  "),
+                Span::styled(fresh_str.clone(), freshness_style),
+            ])
+        } else {
+            let truncated = bar::truncate_suffix(fresh_str, avail_for_fresh);
+            Line::from(vec![
+                Span::raw(name_part).bold(),
+                Span::raw("  "),
+                Span::styled(truncated, freshness_style.dim()),
+            ])
+        };
+        lines.push(header_line);
 
         // Plan / status line
         match &result.status {
@@ -630,7 +645,6 @@ impl Dashboard {
                 if result.kind == ProviderKind::Minimax {
                     render_minimax_windows(&mut lines, &quota.windows, inner.width);
                     let paragraph = Paragraph::new(Text::from(lines))
-                        .wrap(Wrap { trim: false })
                         .alignment(ratatui::layout::Alignment::Left);
                     f.render_widget(paragraph, inner);
                     return;
@@ -758,8 +772,8 @@ impl Dashboard {
             }
         }
 
+        // No wrap — lines clip at card width rather than breaking the layout.
         let paragraph = Paragraph::new(Text::from(lines))
-            .wrap(Wrap { trim: false })
             .alignment(ratatui::layout::Alignment::Left);
         f.render_widget(paragraph, inner);
     }
@@ -898,7 +912,11 @@ fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], in
         return;
     }
 
-    let label_w: usize = 24;
+    // Fit label_w + 2 bars (min 10 each) + spacing into inner_w.
+    // Desired label_w is 24; shrink it if the card is narrow.
+    // min_needed = label + 1 (space) + bar*2 + 2 (gap) = label + 2*10 + 3 = label + 23
+    // → label_max = inner_w.saturating_sub(23)
+    let label_w: usize = 24usize.min(inner_w.saturating_sub(23) as usize).max(8);
     // Reserve: label + trailing space + gap between bars (2 chars).
     let reserved = label_w as u16 + 1 + 2;
     let avail = inner_w.saturating_sub(reserved);

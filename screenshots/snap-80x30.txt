@@ -1,0 +1,30 @@
+ quotas    page 1/2
+ ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  Q Quit  · ▒ ahead  █
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│ ▶ Claude  Updated 11s ago           │ │   DeepSeek  Updated 11s ago         │
+│ Unavailable: Rate limited. Please tr│ │ Auth required                       │
+│ https://claude.ai/settings/usage    │ │ Set API key in env or config        │
+│                                     │ │                                     │
+│                                     │ │                                     │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│   SiliconFlow  Updated 11s ago      │ │   OpenRouter  Updated 11s ago       │
+│ Auth required                       │ │ Auth required                       │
+│ Set API key in env or config        │ │ Set API key in env or config        │
+│                                     │ │                                     │
+│                                     │ │                                     │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│   Z.ai  Updated 10s ago             │ │   Kimi  Updated 11s ago             │
+│ Z.ai max                            │ │ Kimi Coding Plan                    │
+│ 5h           3% (3/100)▒▒▒▒▒▒▒▒▒░░░ │ │ 5h           3% (3/100)░░░░░░░░░░░░ │
+│              resets in 36m          │ │              resets in 4h 13m       │
+│ month MCP    ██36% (1.5k/4k)░░░░░░░ │ │ 7d           5% (5/100)░░░░░░░░░░░░ │
+│              resets in 17d 4h       │ │              resets in 5d 17h       │
+│                                     │ │                                     │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘
+
+
+
+
+8 of 8 providers loaded

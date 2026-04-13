@@ -1,0 +1,40 @@
+ quotas
+ ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  Q Quit  · ▒ ahead  █ overspend
+┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐
+│ ▶ Claude  Updated 11s ago │ │   DeepSeek  …dated 11s ago│ │   SiliconFlow  …ed 11s ago│ │   OpenRouter  …ted 11s ago│
+│ Unavailable: Rate limited.│ │ Auth required             │ │ Auth required             │ │ Auth required             │
+│ https://claude.ai/settings│ │ Set API key in env or conf│ │ Set API key in env or conf│ │ Set API key in env or conf│
+│                           │ │                           │ │                           │ │                           │
+│                           │ │                           │ │                           │ │                           │
+└───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘
+┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐
+│   Z.ai  Updated 10s ago   │ │   Kimi  Updated 11s ago   │ │   Codex  Updated 11s ago  │ │   MiniMax  Updated 10s ago│
+│ Z.ai max                  │ │ Kimi Coding Plan          │ │ Codex / ChatGPT pro       │ │ MiniMax · MiniMax-M*      │
+│ 5h           3% (3/100)▒░ │ │ 5h           3% (3/100)░░ │ │ 5h           34% (34/100) │ │           ── 5h ──    ── 7│
+│              resets in 36m│ │              resets in 4h │ │              resets in 25m│ │ M*       6% 841/15k  2%░░░│
+│ month MCP    36% 1.5k/4k░ │ │ 7d           5% (5/100)░░ │ │ 7d           47% (47/100) │ │ …lan-vlm 6% 841/15k  2%░░░│
+│              resets in 17d│ │              resets in 5d │ │              resets in 3d │ │ …-search 6% 841/15k  2%░░░│
+│                           │ │                           │ │ spark/5h     0% (0/100)░░ │ │ …eech-hd ████49%░░░  7%░░░│
+│                           │ │  ✓ all pacing ahead       │ │              resets in 4h │ │ …6s-768p 0% (0/2)░░  0% (0│
+│                           │ │                           │ │ spark/7d     1% (1/100)░░ │ │ …6s-768p 0% (0/2)░░  0% (0│
+│                           │ │                           │ │              resets in 3d │ │ …sic-2.5 0% (0/4)░░  0% (0│
+│                           │ │                           │ │                           │ │ …sic-2.6 0% (0/100)  0% (0│
+│                           │ │                           │ │                           │ │ …c-cover 0% (0/100)  0% (0│
+│                           │ │                           │ │                           │ │ …eration 0% (0/100)  0% (0│
+│                           │ │                           │ │                           │ │ image-01 0% (0/120)  0% (0│
+│                           │ │                           │ │                           │ │          5h resets in 1h 3│
+│                           │ │                           │ │                           │ │                           │
+└───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘
+
+
+
+
+
+
+
+
+
+
+
+
+8 of 8 providers loaded
