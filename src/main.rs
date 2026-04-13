@@ -1,15 +1,17 @@
 use clap::Parser;
 use crossterm::event::{Event, KeyCode, KeyEvent};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use quotas::auth::env::EnvResolver;
 use quotas::auth::file::FileResolver;
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::{AuthResolver, MultiResolver};
 use quotas::output::json::JsonOutput;
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
-use quotas::tui::Direction;
 use quotas::tui::Dashboard;
+use quotas::tui::Direction;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -60,20 +62,21 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
-        ProviderKind::Kimi => Box::new(MultiResolver::new(vec![Box::new(EnvResolver::new(
-            vec![("MOONSHOT_API_KEY", "moonshot"), ("KIMI_API_KEY", "kimi")],
-        ))])),
-        ProviderKind::Copilot => {
+        ProviderKind::Kimi => Box::new(MultiResolver::new(vec![Box::new(EnvResolver::new(vec![
+            ("MOONSHOT_API_KEY", "moonshot"),
+            ("KIMI_API_KEY", "kimi"),
+        ]))])),
+        ProviderKind::Claude => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![("GITHUB_TOKEN", "github")])),
-                Box::new(OAuthFileResolver::copilot()),
+                Box::new(OAuthFileResolver::claude()),
+                Box::new(EnvResolver::new(vec![("ANTHROPIC_API_KEY", "anthropic")])),
             ];
             Box::new(MultiResolver::new(resolvers))
         }
         ProviderKind::Codex => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![("OPENAI_API_KEY", "openai")])),
                 Box::new(OAuthFileResolver::codex()),
+                Box::new(EnvResolver::new(vec![("OPENAI_API_KEY", "openai")])),
             ];
             Box::new(MultiResolver::new(resolvers))
         }
@@ -87,48 +90,65 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
     names
         .iter()
         .filter_map(|n| match n.to_lowercase().as_str() {
+            "claude" | "anthropic" => Some(ProviderKind::Claude),
+            "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
             "minimax" => Some(ProviderKind::Minimax),
-            "zai" | "zhipu" | "z.ai" => Some(ProviderKind::Zai),
+            "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
             "kimi" | "moonshot" => Some(ProviderKind::Kimi),
-            "copilot" | "github" | "github_copilot" => Some(ProviderKind::Copilot),
-            "codex" | "chatgpt" => Some(ProviderKind::Codex),
             _ => None,
         })
         .collect()
 }
 
-fn fetch_provider_sync(kind: ProviderKind) -> Option<ProviderResult> {
-    let rt = tokio::runtime::Builder::new_current_thread()
+fn fetch_provider_sync(kind: ProviderKind) -> ProviderResult {
+    let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .ok()?;
+    {
+        Ok(rt) => rt,
+        Err(e) => return network_error_result(kind, e.to_string()),
+    };
     rt.block_on(async {
         let auth = build_auth_resolver(&kind);
-        let result: Box<dyn Provider> = match kind {
-            ProviderKind::Minimax => {
-                Box::new(quotas::providers::minimax::MinimaxProvider::with_multi_resolver(
+        let provider: Box<dyn Provider> = match kind {
+            ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
+            ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
+            ProviderKind::Minimax => Box::new(
+                quotas::providers::minimax::MinimaxProvider::with_multi_resolver(
                     MultiResolver::new(vec![auth]),
-                ))
-            }
-            ProviderKind::Zai => {
-                Box::new(quotas::providers::zai::ZaiProvider::new(auth))
-            }
-            ProviderKind::Kimi => {
-                Box::new(quotas::providers::kimi::KimiProvider::new(auth))
-            }
-            ProviderKind::Copilot => {
-                Box::new(quotas::providers::copilot::CopilotProvider::new(auth))
-            }
-            ProviderKind::Codex => {
-                Box::new(quotas::providers::codex::CodexProvider::new(auth))
-            }
+                ),
+            ),
+            ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
+            ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
         };
-        result.fetch().await.ok()
+        match provider.fetch().await {
+            Ok(r) => r,
+            Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
+            Err(e) => network_error_result(kind, e.to_string()),
+        }
     })
 }
 
+fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
+    ProviderResult {
+        kind,
+        status: quotas::providers::ProviderStatus::AuthRequired,
+        fetched_at: chrono::Utc::now(),
+        raw_response: None,
+    }
+}
+
+fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
+    ProviderResult {
+        kind,
+        status: quotas::providers::ProviderStatus::NetworkError { message },
+        fetched_at: chrono::Utc::now(),
+        raw_response: None,
+    }
+}
+
 fn fetch_all(kinds: Vec<ProviderKind>) -> Vec<ProviderResult> {
-    kinds.into_iter().filter_map(fetch_provider_sync).collect()
+    kinds.into_iter().map(fetch_provider_sync).collect()
 }
 
 fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {

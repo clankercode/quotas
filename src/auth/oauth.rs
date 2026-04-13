@@ -7,57 +7,67 @@ use super::{AuthCredential, AuthResolver, ResolvedAuth};
 
 fn parse_codex_auth(content: &str) -> Option<String> {
     #[derive(Deserialize)]
-    struct CodexAuth {
-        access_token: String,
+    struct Tokens {
+        #[serde(rename = "access_token")]
+        access_token: Option<String>,
     }
-    serde_json::from_str::<CodexAuth>(content)
-        .ok()
-        .map(|a| a.access_token)
+    #[derive(Deserialize)]
+    struct CodexAuth {
+        #[serde(rename = "OPENAI_API_KEY")]
+        openai_api_key: Option<String>,
+        tokens: Option<Tokens>,
+    }
+    let parsed: CodexAuth = serde_json::from_str(content).ok()?;
+    parsed
+        .tokens
+        .and_then(|t| t.access_token)
+        .or(parsed.openai_api_key)
 }
 
-fn parse_copilot_token(content: &str) -> Option<String> {
+fn parse_claude_credentials(content: &str) -> Option<String> {
     #[derive(Deserialize)]
-    #[allow(dead_code)]
-    struct CopilotToken {
-        token: Option<String>,
-        expires_at: Option<String>,
+    struct Oauth {
+        #[serde(rename = "accessToken")]
+        access_token: Option<String>,
     }
     #[derive(Deserialize)]
-    struct CopilotTokens {
-        tokens: Vec<CopilotToken>,
+    struct Credentials {
+        #[serde(rename = "claudeAiOauth")]
+        claude_ai_oauth: Option<Oauth>,
     }
-    serde_json::from_str::<CopilotTokens>(content)
-        .ok()
-        .and_then(|t| t.tokens.into_iter().next()?.token)
+    let parsed: Credentials = serde_json::from_str(content).ok()?;
+    parsed.claude_ai_oauth.and_then(|o| o.access_token)
 }
 
 pub struct OAuthFileResolver {
-    pub file_path: PathBuf,
+    pub file_paths: Vec<PathBuf>,
     pub parse_fn: fn(&str) -> Option<String>,
     pub source_name: String,
-    pub prefix: String,
 }
 
 impl OAuthFileResolver {
     pub fn codex() -> Self {
         Self {
-            file_path: dirs::home_dir()
+            file_paths: vec![dirs::home_dir()
                 .unwrap_or_default()
-                .join(".codex/auth.json"),
+                .join(".codex/auth.json")],
             parse_fn: parse_codex_auth,
             source_name: "codex".to_string(),
-            prefix: "token".to_string(),
         }
     }
 
-    pub fn copilot() -> Self {
+    pub fn claude() -> Self {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+            paths.push(PathBuf::from(dir).join(".credentials.json"));
+        }
+        if let Some(home) = dirs::home_dir() {
+            paths.push(home.join(".claude/.credentials.json"));
+        }
         Self {
-            file_path: dirs::home_dir()
-                .unwrap_or_default()
-                .join(".config/github-copilot/tokens.json"),
-            parse_fn: parse_copilot_token,
-            source_name: "copilot".to_string(),
-            prefix: "token".to_string(),
+            file_paths: paths,
+            parse_fn: parse_claude_credentials,
+            source_name: "claude".to_string(),
         }
     }
 }
@@ -65,18 +75,50 @@ impl OAuthFileResolver {
 #[async_trait]
 impl AuthResolver for OAuthFileResolver {
     async fn resolve(&self) -> Result<ResolvedAuth> {
-        if !self.file_path.exists() {
-            return Err(Error::Auth(format!(
-                "OAuth file not found: {}",
-                self.file_path.display()
-            )));
+        for path in &self.file_paths {
+            if !path.exists() {
+                continue;
+            }
+            let content = match tokio::fs::read_to_string(path).await {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Some(key) = (self.parse_fn)(&content) {
+                return Ok(ResolvedAuth {
+                    credential: AuthCredential::Token(key),
+                    source: format!("oauth:{}", path.display()),
+                });
+            }
         }
-        let content = tokio::fs::read_to_string(&self.file_path).await?;
-        let key = (self.parse_fn)(&content);
-        key.map(|k| ResolvedAuth {
-            credential: AuthCredential::Token(k),
-            source: format!("oauth:{}", self.file_path.display()),
-        })
-        .ok_or_else(|| Error::Auth("failed to parse OAuth file".into()))
+        Err(Error::Auth(format!(
+            "no OAuth credentials found for {}",
+            self.source_name
+        )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_claude_credentials() {
+        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-abc","refreshToken":"r","expiresAt":1}}"#;
+        assert_eq!(
+            parse_claude_credentials(json).as_deref(),
+            Some("sk-ant-oat01-abc")
+        );
+    }
+
+    #[test]
+    fn parses_codex_auth_token_field() {
+        let json = r#"{"tokens":{"id_token":"x","access_token":"oauth-abc"}}"#;
+        assert_eq!(parse_codex_auth(json).as_deref(), Some("oauth-abc"));
+    }
+
+    #[test]
+    fn parses_codex_auth_api_key_fallback() {
+        let json = r#"{"OPENAI_API_KEY":"sk-proj-xxx"}"#;
+        assert_eq!(parse_codex_auth(json).as_deref(), Some("sk-proj-xxx"));
     }
 }

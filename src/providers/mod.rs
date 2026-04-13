@@ -1,42 +1,52 @@
+pub mod claude;
 pub mod codex;
-pub mod copilot;
 pub mod kimi;
 pub mod minimax;
 pub mod zai;
 
+use crate::auth::AuthResolver;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::auth::AuthResolver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
+    Claude,
+    Codex,
     Minimax,
     Zai,
     Kimi,
-    Copilot,
-    Codex,
 }
 
 impl ProviderKind {
     pub fn display_name(&self) -> &'static str {
         match self {
+            ProviderKind::Claude => "Claude",
+            ProviderKind::Codex => "Codex",
             ProviderKind::Minimax => "MiniMax",
             ProviderKind::Zai => "Z.ai",
             ProviderKind::Kimi => "Kimi",
-            ProviderKind::Copilot => "GitHub Copilot",
-            ProviderKind::Codex => "Codex",
+        }
+    }
+
+    pub fn slug(&self) -> &'static str {
+        match self {
+            ProviderKind::Claude => "claude",
+            ProviderKind::Codex => "codex",
+            ProviderKind::Minimax => "minimax",
+            ProviderKind::Zai => "zai",
+            ProviderKind::Kimi => "kimi",
         }
     }
 
     pub fn all() -> &'static [ProviderKind] {
         &[
+            ProviderKind::Claude,
+            ProviderKind::Codex,
             ProviderKind::Minimax,
             ProviderKind::Zai,
             ProviderKind::Kimi,
-            ProviderKind::Copilot,
-            ProviderKind::Codex,
         ]
     }
 }

@@ -2,6 +2,15 @@
 name = "quotas"
 version = "0.1.0"
 edition = "2021"
+description = "CLI that auto-detects AI provider credentials (Claude, Codex, MiniMax, Kimi, Z.ai) and shows your usage quotas in a TUI or JSON."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/xertrov/quotas"
+homepage = "https://github.com/xertrov/quotas"
+readme = "README.md"
+keywords = ["cli", "tui", "quota", "usage", "llm"]
+categories = ["command-line-utilities"]
+authors = ["Max Kaye"]
+rust-version = "1.75"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

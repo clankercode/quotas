@@ -38,6 +38,9 @@ impl AuthResolver for FileResolver {
                 }
             }
         }
-        Err(Error::Auth(format!("no credentials in files for {}", self.source_name)))
+        Err(Error::Auth(format!(
+            "no credentials in files for {}",
+            self.source_name
+        )))
     }
 }

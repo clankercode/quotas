@@ -63,7 +63,9 @@ impl MinimaxProvider {
             status: ProviderStatus::Unavailable {
                 info: crate::providers::UnavailableInfo {
                     reason: msg.to_string(),
-                    console_url: Some("https://platform.minimax.io/user-center/payment/coding-plan".into()),
+                    console_url: Some(
+                        "https://platform.minimax.io/user-center/payment/coding-plan".into(),
+                    ),
                 },
             },
             fetched_at: Utc::now(),
@@ -72,55 +74,60 @@ impl MinimaxProvider {
     }
 
     fn parse_response(&self, body: &serde_json::Value) -> Result<ProviderQuota> {
-        #[derive(Deserialize)]
-        #[allow(dead_code)]
-        struct ModelRemain {
-            model_name: String,
-            start_time: i64,
-            end_time: i64,
-            remains_time: i64,
-            #[serde(rename = "current_interval_total_count")]
-            total_count: i64,
-            #[serde(rename = "current_interval_usage_count")]
-            usage_count: i64,
-        }
-
-        #[derive(Deserialize)]
-        struct Response {
-            model_remains: Vec<ModelRemain>,
-        }
-
-        let resp: Response = serde_json::from_value(body.clone())
-            .map_err(|e| Error::Provider(format!("parse error: {}", e)))?;
-
-        let windows: Vec<QuotaWindow> = resp
-            .model_remains
-            .iter()
-            .map(|m| {
-                let remaining = m.usage_count;
-                let used = m.total_count - m.usage_count;
-                QuotaWindow {
-                    window_type: "5h".to_string(),
-                    used,
-                    limit: m.total_count,
-                    remaining,
-                    reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
-                }
-            })
-            .collect();
-
-        let plan_name = resp
-            .model_remains
-            .first()
-            .map(|m| m.model_name.clone())
-            .unwrap_or_else(|| "Token Plan".to_string());
-
-        Ok(ProviderQuota {
-            plan_name,
-            windows,
-            unlimited: false,
-        })
+        parse_response(body)
     }
+}
+
+pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct ModelRemain {
+        model_name: String,
+        start_time: i64,
+        end_time: i64,
+        #[serde(default)]
+        remains_time: i64,
+        #[serde(rename = "current_interval_total_count")]
+        total_count: i64,
+        #[serde(rename = "current_interval_usage_count")]
+        usage_count: i64,
+    }
+
+    #[derive(Deserialize)]
+    struct Response {
+        model_remains: Vec<ModelRemain>,
+    }
+
+    let resp: Response = serde_json::from_value(body.clone())
+        .map_err(|e| Error::Provider(format!("parse error: {}", e)))?;
+
+    let windows: Vec<QuotaWindow> = resp
+        .model_remains
+        .iter()
+        .map(|m| {
+            let remaining = m.usage_count;
+            let used = m.total_count - m.usage_count;
+            QuotaWindow {
+                window_type: "5h".to_string(),
+                used,
+                limit: m.total_count,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
+            }
+        })
+        .collect();
+
+    let plan_name = resp
+        .model_remains
+        .first()
+        .map(|m| m.model_name.clone())
+        .unwrap_or_else(|| "Token Plan".to_string());
+
+    Ok(ProviderQuota {
+        plan_name,
+        windows,
+        unlimited: false,
+    })
 }
 
 #[async_trait]
@@ -154,5 +161,34 @@ impl crate::providers::Provider for MinimaxProvider {
 
     fn auth_resolver(&self) -> &dyn AuthResolver {
         &*self.auth
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_minimax_remains_payload() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "MiniMax-M2.7",
+                "start_time": 1712937600000i64,
+                "end_time": 1712955600000i64,
+                "remains_time": 14400000i64,
+                "current_interval_total_count": 200,
+                "current_interval_usage_count": 187
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiniMax-M2.7");
+        assert_eq!(quota.windows.len(), 1);
+        let w = &quota.windows[0];
+        assert_eq!(w.window_type, "5h");
+        assert_eq!(w.limit, 200);
+        assert_eq!(w.remaining, 187);
+        assert_eq!(w.used, 13);
+        assert!(w.reset_at.is_some());
     }
 }

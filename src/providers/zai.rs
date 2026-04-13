@@ -64,64 +64,89 @@ impl ZaiProvider {
     }
 
     fn parse_response(&self, body: &serde_json::Value) -> Result<ProviderQuota> {
-        #[derive(Deserialize)]
-        #[allow(dead_code)]
-        struct LimitEntry {
-            #[serde(rename = "type", default)]
-            limit_type: String,
-            #[serde(rename = "rawType", default)]
-            raw_type: Option<String>,
-            #[serde(default)]
-            usage: i64,
-            #[serde(default)]
-            current_value: i64,
-            #[serde(default)]
-            remaining: i64,
-            #[serde(default)]
-            percentage: i64,
-            #[serde(rename = "next_reset_time", default)]
-            next_reset_time: Option<i64>,
-        }
-
-        #[derive(Deserialize)]
-        struct Data {
-            #[serde(default)]
-            level: String,
-            #[serde(default)]
-            limits: Vec<LimitEntry>,
-        }
-
-        let data: Data = serde_json::from_value(body.get("data").cloned().unwrap_or_default())
-            .map_err(|e| crate::Error::Provider(format!("parse error: {}", e)))?;
-
-        let windows: Vec<QuotaWindow> = data
-            .limits
-            .iter()
-            .map(|l| {
-                let used = l.usage - l.remaining;
-                let raw = l.raw_type.as_deref().unwrap_or("");
-                let (window_type, _, _) = match (raw, l.limit_type.as_str()) {
-                    ("TOKENS_LIMIT", _) if l.limit_type.contains("5h") || (l.limit_type.contains("Token") && l.usage <= 2_000_000) => ("5h".to_string(), 3, 5),
-                    ("TOKENS_LIMIT", _) if l.limit_type.contains("Weekly") => ("weekly".to_string(), 6, 7),
-                    ("TIME_LIMIT", _) => ("monthly_mcp".to_string(), 5, 1),
-                    _ => (l.limit_type.clone(), 0, 0),
-                };
-                QuotaWindow {
-                    window_type,
-                    used,
-                    limit: l.usage,
-                    remaining: l.remaining,
-                    reset_at: l.next_reset_time.and_then(|t| Utc.timestamp_millis_opt(t).single()),
-                }
-            })
-            .collect();
-
-        Ok(ProviderQuota {
-            plan_name: format!("Z.ai {}", data.level),
-            windows,
-            unlimited: false,
-        })
+        parse_response(body)
     }
+}
+
+pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct LimitEntry {
+        #[serde(rename = "type", default)]
+        limit_type: String,
+        #[serde(rename = "rawType", default)]
+        raw_type: Option<String>,
+        #[serde(default)]
+        unit: i64,
+        #[serde(default)]
+        number: i64,
+        #[serde(default)]
+        usage: i64,
+        #[serde(rename = "currentValue", default)]
+        current_value: i64,
+        #[serde(default)]
+        remaining: i64,
+        #[serde(rename = "nextResetTime", default)]
+        next_reset_time: Option<i64>,
+    }
+
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        level: String,
+        #[serde(default)]
+        limits: Vec<LimitEntry>,
+    }
+
+    let data: Data = serde_json::from_value(body.get("data").cloned().unwrap_or_default())
+        .map_err(|e| crate::Error::Provider(format!("parse error: {}", e)))?;
+
+    let windows: Vec<QuotaWindow> = data
+        .limits
+        .iter()
+        .map(|l| {
+            let raw = l.raw_type.as_deref().unwrap_or(l.limit_type.as_str());
+            let label = l.limit_type.as_str();
+            let window_type = match raw {
+                "TOKENS_LIMIT" => {
+                    if label.contains("5h") || label.contains("5 Hour") || l.number <= 5 {
+                        "5h".to_string()
+                    } else if label.contains("Weekly") || label.contains("Week") || l.number >= 7 {
+                        "weekly".to_string()
+                    } else {
+                        match l.unit {
+                            3 => "5h".to_string(),
+                            6 => "weekly".to_string(),
+                            _ => "tokens".to_string(),
+                        }
+                    }
+                }
+                "TIME_LIMIT" => "monthly_mcp".to_string(),
+                other => other.to_string(),
+            };
+            QuotaWindow {
+                window_type,
+                used: l.current_value,
+                limit: l.usage,
+                remaining: l.remaining,
+                reset_at: l
+                    .next_reset_time
+                    .and_then(|t| Utc.timestamp_millis_opt(t).single()),
+            }
+        })
+        .collect();
+
+    let plan_name = if data.level.is_empty() {
+        "Z.ai Coding Plan".to_string()
+    } else {
+        format!("Z.ai {}", data.level)
+    };
+
+    Ok(ProviderQuota {
+        plan_name,
+        windows,
+        unlimited: false,
+    })
 }
 
 #[async_trait]
@@ -152,5 +177,66 @@ impl crate::providers::Provider for ZaiProvider {
 
     fn auth_resolver(&self) -> &dyn AuthResolver {
         &*self.auth
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_zai_quota_payload() {
+        let body = serde_json::json!({
+            "code": 200,
+            "msg": "success",
+            "data": {
+                "level": "pro",
+                "limits": [
+                    {
+                        "type": "5h Token",
+                        "rawType": "TOKENS_LIMIT",
+                        "unit": 3,
+                        "number": 5,
+                        "usage": 1_000_000i64,
+                        "currentValue": 72_000i64,
+                        "remaining": 928_000i64,
+                        "percentage": 7,
+                        "nextResetTime": 1712956800000i64
+                    },
+                    {
+                        "type": "Weekly Token",
+                        "rawType": "TOKENS_LIMIT",
+                        "unit": 6,
+                        "number": 7,
+                        "usage": 5_000_000i64,
+                        "currentValue": 2_650_000i64,
+                        "remaining": 2_350_000i64,
+                        "percentage": 53,
+                        "nextResetTime": 1713388800000i64
+                    },
+                    {
+                        "type": "MCP usage(1 Month)",
+                        "rawType": "TIME_LIMIT",
+                        "unit": 5,
+                        "number": 1,
+                        "usage": 1000,
+                        "currentValue": 42,
+                        "remaining": 958,
+                        "percentage": 4
+                    }
+                ]
+            }
+        });
+
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "Z.ai pro");
+        assert_eq!(quota.windows.len(), 3);
+        assert_eq!(quota.windows[0].window_type, "5h");
+        assert_eq!(quota.windows[0].limit, 1_000_000);
+        assert_eq!(quota.windows[0].used, 72_000);
+        assert_eq!(quota.windows[0].remaining, 928_000);
+        assert!(quota.windows[0].reset_at.is_some());
+        assert_eq!(quota.windows[1].window_type, "weekly");
+        assert_eq!(quota.windows[2].window_type, "monthly_mcp");
     }
 }
