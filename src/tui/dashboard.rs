@@ -313,6 +313,48 @@ impl Dashboard {
         }
     }
 
+    /// Assigns each card in `page_order` a (row, col, span) placement.
+    /// MiniMax spans 2 columns; all other cards span 1.
+    /// Cards wrap to the next row when they would overflow `cols`.
+    fn flow_placements(
+        entries: &[ProviderEntry],
+        page_order: &[usize],
+        cols: usize,
+    ) -> Vec<(usize, usize, usize)> {
+        let mut out = Vec::with_capacity(page_order.len());
+        let mut row = 0usize;
+        let mut col = 0usize;
+
+        for &entry_idx in page_order {
+            let span = match &entries[entry_idx] {
+                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
+                    if r.kind == ProviderKind::Minimax =>
+                {
+                    2
+                }
+                _ => 1,
+            }
+            .min(cols); // Never wider than the grid itself.
+
+            // Wrap to next row if the card won't fit.
+            if col > 0 && col + span > cols {
+                row += 1;
+                col = 0;
+            }
+
+            out.push((row, col, span));
+            col += span;
+
+            // End of row — advance.
+            if col >= cols {
+                row += 1;
+                col = 0;
+            }
+        }
+
+        out
+    }
+
     fn compute_layout(&self, grid_area: Rect) -> GridLayout {
         let n = self.visible_count().max(1);
         let max_cols = (grid_area.width / MIN_CARD_W).max(1) as usize;
@@ -482,53 +524,57 @@ impl Dashboard {
         let order = self.visual_order();
         let page_count = page_end - page_start;
         let cols = layout.cols.min(page_count.max(1));
-        let rows = page_count.div_ceil(cols);
 
-        // Each row gets exactly its natural height (max across cards in that
-        // row). Any remaining vertical space is absorbed by a spacer below
-        // all rows, so cards don't balloon with empty whitespace.
-        let mut row_heights: Vec<u16> = vec![MIN_CARD_H; rows];
+        // Flow-based placement: MiniMax spans 2 columns, all others span 1.
+        // This keeps card widths at a consistent unit_col_w so MiniMax is
+        // always exactly twice as wide as its neighbours.
+        let placements =
+            Self::flow_placements(&self.entries, &order[page_start..page_end], cols);
+        let num_rows = placements
+            .iter()
+            .map(|(r, _, _)| *r + 1)
+            .max()
+            .unwrap_or(0)
+            .max(1);
+
+        // Each row gets the tallest natural card height in that row.
+        let mut row_heights: Vec<u16> = vec![MIN_CARD_H; num_rows];
         for (i, visual_pos) in (page_start..page_end).enumerate() {
-            let row_i = i / cols;
+            let (row_i, _, _) = placements[i];
             let entry_idx = order[visual_pos];
             let h = Self::natural_card_height(&self.entries[entry_idx]);
             if h > row_heights[row_i] {
                 row_heights[row_i] = h;
             }
         }
+
         // Clamp so we don't overflow the grid area.
         let total_fixed: u16 = row_heights.iter().sum();
         if total_fixed > grid_area.height {
-            // Fallback: ratio layout so everything still fits.
             let weights: Vec<u32> = row_heights.iter().map(|h| *h as u32).collect();
             let total_w: u32 = weights.iter().sum::<u32>().max(1);
             let row_constraints: Vec<Constraint> = weights
                 .iter()
                 .map(|w| Constraint::Ratio(*w, total_w))
                 .collect();
-            let row_rects = Layout::vertical(row_constraints).split(grid_area);
-            let _ = row_rects; // handled by the non-overflow path below; fall through.
+            let _ = Layout::vertical(row_constraints).split(grid_area);
         }
         let mut row_constraints: Vec<Constraint> =
             row_heights.iter().map(|h| Constraint::Length(*h)).collect();
-        row_constraints.push(Constraint::Fill(1)); // spacer absorbs slack
+        row_constraints.push(Constraint::Fill(1));
         let all_rects = Layout::vertical(row_constraints).split(grid_area);
-        // all_rects has rows+1 entries; last one is the spacer.
-        let row_rects = &all_rects[..rows];
+        let row_rects = &all_rects[..num_rows];
+
+        // Unit column width: all cards use multiples of this so columns align.
+        let unit_col_w = (grid_area.width / cols as u16).max(1);
 
         let mut hit_areas: Vec<(Rect, usize)> = Vec::with_capacity(page_end - page_start);
         for (i, visual_pos) in (page_start..page_end).enumerate() {
-            let col_i = i % cols;
-            let row_i = i / cols;
+            let (row_i, col_i, span) = placements[i];
             let row_area = row_rects[row_i];
-            // Cards actually laid out in this row (partial last row must
-            // stretch its remaining cards across the full row width).
-            let row_start = row_i * cols;
-            let row_end = (row_start + cols).min(page_count);
-            let cards_in_row = (row_end - row_start).max(1);
-            let col_w = row_area.width / cards_in_row as u16;
-            let x = row_area.x + col_i as u16 * col_w;
-            let card_area = Rect::new(x, row_area.y, col_w.saturating_sub(1), row_area.height);
+            let x = row_area.x + col_i as u16 * unit_col_w;
+            let w = (span as u16 * unit_col_w).saturating_sub(1);
+            let card_area = Rect::new(x, row_area.y, w, row_area.height);
             let selected = visual_pos == self.selected_index;
             let entry_idx = order[visual_pos];
             hit_areas.push((card_area, visual_pos));
