@@ -30,93 +30,115 @@ impl MimoProvider {
         }
     }
 
-    async fn try_balance(&self, key: &str, base: &str) -> Result<(u16, serde_json::Value)> {
+    /// Try a JSON endpoint; returns None if the response body isn't JSON (e.g. HTML 404 from nginx).
+    async fn try_json(&self, key: &str, url: &str) -> Result<Option<(u16, serde_json::Value)>> {
         let resp = self
             .http
-            .get(format!("{}/user/balance", base))
+            .get(url)
             .header("Authorization", format!("Bearer {}", key))
             .send()
             .await?;
         let status = resp.status().as_u16();
-        let body: serde_json::Value = resp.json().await?;
-        Ok((status, body))
+        let text = resp.text().await?;
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(body) => Ok(Some((status, body))),
+            Err(_) => Ok(None), // HTML / non-JSON response — treat as absent endpoint
+        }
+    }
+
+    /// Verify the API key is valid by calling /v1/models. Returns the base URL
+    /// that accepted the key, or None if auth failed on both.
+    async fn detect_base_url(&self, key: &str) -> Result<Option<&'static str>> {
+        // Token Plan first — user signed up for the pro plan.
+        for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
+            if let Some((status, _)) = self
+                .try_json(key, &format!("{}/models", base))
+                .await?
+            {
+                if status == 200 {
+                    return Ok(Some(base));
+                }
+            }
+        }
+        Ok(None)
     }
 
     async fn fetch_balance(&self, key: &str) -> Result<ProviderResult> {
-        // Try PAYG endpoint first; fall back to Token Plan endpoint.
-        let (status, body, base_used) = match self.try_balance(key, PAYG_BASE).await {
-            Ok((s, b)) if s != 404 => (s, b, PAYG_BASE),
-            _ => {
-                let (s, b) = self.try_balance(key, TOKEN_PLAN_BASE).await?;
-                (s, b, TOKEN_PLAN_BASE)
+        // Try balance endpoint on Token Plan first, then PAYG.
+        for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
+            if let Some((status, body)) = self
+                .try_json(key, &format!("{}/user/balance", base))
+                .await?
+            {
+                if status == 401 || status == 403 {
+                    let reason = body
+                        .pointer("/error/message")
+                        .or_else(|| body.get("message"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Authentication failed")
+                        .to_string();
+                    return Ok(ProviderResult {
+                        kind: ProviderKind::Mimo,
+                        status: ProviderStatus::Unavailable {
+                            info: crate::providers::UnavailableInfo {
+                                reason,
+                                console_url: Some(DASHBOARD_URL.into()),
+                            },
+                        },
+                        fetched_at: Utc::now(),
+                        raw_response: Some(body),
+                        auth_source: None,
+                    });
+                }
+                if status < 400 {
+                    let quota = parse_balance(&body, base)?;
+                    return Ok(ProviderResult {
+                        kind: ProviderKind::Mimo,
+                        status: ProviderStatus::Available { quota },
+                        fetched_at: Utc::now(),
+                        raw_response: Some(body),
+                        auth_source: None,
+                    });
+                }
+                // 4xx other than auth → keep trying other base URL
             }
-        };
-
-        if status == 401 || status == 403 {
-            return Ok(ProviderResult {
-                kind: ProviderKind::Mimo,
-                status: ProviderStatus::Unavailable {
-                    info: crate::providers::UnavailableInfo {
-                        reason: body
-                            .pointer("/error/message")
-                            .or_else(|| body.get("message"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("Authentication failed")
-                            .to_string(),
-                        console_url: Some(DASHBOARD_URL.into()),
-                    },
-                },
-                fetched_at: Utc::now(),
-                raw_response: Some(body),
-                auth_source: None,
-            });
+            // None = non-JSON (HTML 404) → keep trying
         }
 
-        if status == 404 {
-            // No quota endpoint available on either base URL.
-            return Ok(ProviderResult {
-                kind: ProviderKind::Mimo,
-                status: ProviderStatus::Unavailable {
-                    info: crate::providers::UnavailableInfo {
-                        reason: "No quota API available for this account type".to_string(),
-                        console_url: Some(DASHBOARD_URL.into()),
+        // No balance endpoint found on either URL. Verify auth is valid.
+        match self.detect_base_url(key).await? {
+            Some(_base) => {
+                // Key works but there's no quota API.
+                Ok(ProviderResult {
+                    kind: ProviderKind::Mimo,
+                    status: ProviderStatus::Unavailable {
+                        info: crate::providers::UnavailableInfo {
+                            reason: "No quota API — check usage at platform.xiaomimimo.com"
+                                .to_string(),
+                            console_url: Some(DASHBOARD_URL.into()),
+                        },
                     },
-                },
-                fetched_at: Utc::now(),
-                raw_response: None,
-                auth_source: None,
-            });
-        }
-
-        if status >= 400 {
-            let msg = body
-                .pointer("/error/message")
-                .or_else(|| body.get("message"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error")
-                .to_string();
-            return Ok(ProviderResult {
-                kind: ProviderKind::Mimo,
-                status: ProviderStatus::Unavailable {
-                    info: crate::providers::UnavailableInfo {
-                        reason: msg,
-                        console_url: Some(DASHBOARD_URL.into()),
+                    fetched_at: Utc::now(),
+                    raw_response: None,
+                    auth_source: None,
+                })
+            }
+            None => {
+                // Auth failed on both URLs.
+                Ok(ProviderResult {
+                    kind: ProviderKind::Mimo,
+                    status: ProviderStatus::Unavailable {
+                        info: crate::providers::UnavailableInfo {
+                            reason: "Invalid API key".to_string(),
+                            console_url: Some(DASHBOARD_URL.into()),
+                        },
                     },
-                },
-                fetched_at: Utc::now(),
-                raw_response: Some(body),
-                auth_source: None,
-            });
+                    fetched_at: Utc::now(),
+                    raw_response: None,
+                    auth_source: None,
+                })
+            }
         }
-
-        let quota = parse_balance(&body, base_used)?;
-        Ok(ProviderResult {
-            kind: ProviderKind::Mimo,
-            status: ProviderStatus::Available { quota },
-            fetched_at: Utc::now(),
-            raw_response: Some(body),
-            auth_source: None,
-        })
     }
 }
 
