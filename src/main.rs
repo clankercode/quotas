@@ -278,6 +278,13 @@ fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
     }
 }
 
+fn auto_refresh_interval(kind: ProviderKind) -> Duration {
+    match kind {
+        ProviderKind::Claude => Duration::from_secs(600), // 10 min — avoid rate-limiting
+        _ => Duration::from_secs(300),                    // 5 min for everything else
+    }
+}
+
 fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
     kinds
         .into_iter()
@@ -316,10 +323,10 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
-    spawn_fetches(&rt, &kinds, config.clone(), tx);
-    let mut last_refresh = Instant::now();
-    let auto_refresh_interval = Duration::from_secs(150);
+    let (mut cur_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
+    spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+    // Per-provider last-refresh timestamps so each provider has its own cooldown.
+    let mut last_refresh: Vec<Instant> = kinds.iter().map(|_| Instant::now()).collect();
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
@@ -329,14 +336,21 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
             dashboard.update(idx, result);
         }
 
-        // Auto-refresh every 2.5 minutes once the previous batch has
-        // settled. The user doesn't have to press R to stay current.
-        if dashboard.all_loaded() && last_refresh.elapsed() >= auto_refresh_interval {
-            dashboard.reset_loading();
-            let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
-            rx = new_rx;
-            spawn_fetches(&rt, &kinds, config.clone(), new_tx);
-            last_refresh = Instant::now();
+        // Per-provider auto-refresh: each provider refreshes on its own schedule.
+        // Claude uses a longer interval to avoid rate-limiting.
+        for (idx, kind) in kinds.iter().cloned().enumerate() {
+            if dashboard.is_entry_done(idx)
+                && last_refresh[idx].elapsed() >= auto_refresh_interval(kind)
+            {
+                dashboard.reset_one(idx);
+                let tx2 = cur_tx.clone();
+                let config2 = config.clone();
+                rt.spawn(async move {
+                    let result = fetch_one(kind, &config2).await;
+                    let _ = tx2.send((idx, result));
+                });
+                last_refresh[idx] = Instant::now();
+            }
         }
 
         if crossterm::event::poll(tick)? {
@@ -362,8 +376,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                             dashboard.reset_loading();
                             let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                             rx = new_rx;
-                            spawn_fetches(&rt, &kinds, config.clone(), new_tx);
-                            last_refresh = Instant::now();
+                            cur_tx = new_tx;
+                            spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+                            for t in last_refresh.iter_mut() { *t = Instant::now(); }
                         }
                         Some(HitResult::Quit) => return Ok(()),
                         Some(HitResult::Card(vpos)) => {
@@ -397,8 +412,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                         dashboard.reset_loading();
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                         rx = new_rx;
-                        spawn_fetches(&rt, &kinds, config.clone(), new_tx);
-                        last_refresh = Instant::now();
+                        cur_tx = new_tx;
+                        spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+                        for t in last_refresh.iter_mut() { *t = Instant::now(); }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         if let Some(selected) = dashboard.selected_provider() {

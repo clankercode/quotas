@@ -110,6 +110,27 @@ impl Dashboard {
         None
     }
 
+    /// Whether the entry at `idx` (by kinds index) has a completed result.
+    pub fn is_entry_done(&self, idx: usize) -> bool {
+        self.entries
+            .get(idx)
+            .map_or(false, |e| matches!(e, ProviderEntry::Done(_)))
+    }
+
+    /// Reset a single entry to Refreshing (keeps old data). Used for
+    /// per-provider auto-refresh so each provider has its own cadence.
+    pub fn reset_one(&mut self, idx: usize) {
+        if let Some(e) = self.entries.get_mut(idx) {
+            let old = std::mem::replace(e, ProviderEntry::Loading);
+            *e = match old {
+                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => {
+                    ProviderEntry::Refreshing(r)
+                }
+                ProviderEntry::Loading => ProviderEntry::Loading,
+            };
+        }
+    }
+
     pub fn scroll_detail(&mut self, delta: i16) {
         self.detail_scroll = (self.detail_scroll as i32 + delta as i32).max(0) as u16;
     }
@@ -497,6 +518,9 @@ impl Dashboard {
                     };
                     (fixed + content).max(MIN_CARD_H)
                 }
+                // Auth-required cards are squat indicator boxes: just border +
+                // header line + one status line.
+                ProviderStatus::AuthRequired => 4,
                 _ => MIN_CARD_H,
             },
         }
@@ -526,6 +550,8 @@ impl Dashboard {
                     let raw = 4 + effective;
                     raw.clamp(5, 10)
                 }
+                // Push auth-required cards to the end of the visual order.
+                ProviderStatus::AuthRequired => 20,
                 _ => 5,
             },
         }
@@ -763,7 +789,6 @@ impl Dashboard {
                 }
             }
             ProviderStatus::AuthRequired => {
-                lines.push(Line::from(Span::raw("Auth required").red()));
                 lines.push(Line::from(Span::raw("Set API key in env or config").dim()));
             }
             ProviderStatus::NetworkError { message } => {
