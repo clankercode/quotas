@@ -75,7 +75,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek,
             ProviderKind::SiliconFlow,
             ProviderKind::OpenRouter,
-            ProviderKind::Mimo,
+            // ProviderKind::Mimo, // disabled — platform API requires browser cookie auth
         ]
     }
 }
