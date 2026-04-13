@@ -1,6 +1,7 @@
 pub mod env;
 pub mod file;
 pub mod oauth;
+pub mod opencode;
 
 use crate::{Error, Result};
 use async_trait::async_trait;

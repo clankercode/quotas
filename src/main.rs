@@ -7,6 +7,7 @@ use crossterm::terminal::{
 use quotas::auth::env::EnvResolver;
 use quotas::auth::file::FileResolver;
 use quotas::auth::oauth::OAuthFileResolver;
+use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::{AuthResolver, MultiResolver};
 use quotas::output::json::JsonOutput;
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
@@ -30,6 +31,29 @@ struct Args {
     provider: Vec<String>,
 }
 
+/// Parse a credentials file that may be either a raw token on the first
+/// non-empty, non-comment line or a `key=value` file with `api_key=...` /
+/// `token=...` entries.
+fn parse_key_file(content: &str) -> Option<String> {
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("api_key=") {
+            return Some(rest.trim().trim_matches('"').to_string());
+        }
+        if let Some(rest) = line.strip_prefix("token=") {
+            return Some(rest.trim().trim_matches('"').to_string());
+        }
+        if line.contains('=') {
+            continue;
+        }
+        return Some(line.to_string());
+    }
+    None
+}
+
 fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
     match kind {
         ProviderKind::Minimax => {
@@ -37,14 +61,10 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
                 Box::new(EnvResolver::new(vec![("MINIMAX_API_KEY", "minimax")])),
                 Box::new(FileResolver::new(
                     vec![dirs::home_dir().unwrap_or_default().join(".minimax")],
-                    |content| {
-                        content
-                            .lines()
-                            .find(|l| l.starts_with("api_key="))
-                            .map(|l| l.trim_start_matches("api_key=").to_string())
-                    },
+                    parse_key_file,
                     "minimax",
                 )),
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Minimax)),
             ];
             Box::new(MultiResolver::new(resolvers))
         }
@@ -56,19 +76,36 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
                 ])),
                 Box::new(FileResolver::new(
                     vec![dirs::home_dir().unwrap_or_default().join(".api-zai")],
-                    |content| content.lines().next().map(|l| l.to_string()),
+                    parse_key_file,
                     "zai",
                 )),
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Zai)),
             ];
             Box::new(MultiResolver::new(resolvers))
         }
-        ProviderKind::Kimi => Box::new(MultiResolver::new(vec![Box::new(EnvResolver::new(vec![
-            ("MOONSHOT_API_KEY", "moonshot"),
-            ("KIMI_API_KEY", "kimi"),
-        ]))])),
+        ProviderKind::Kimi => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![
+                    ("MOONSHOT_API_KEY", "moonshot"),
+                    ("KIMI_API_KEY", "kimi"),
+                ])),
+                Box::new(FileResolver::new(
+                    vec![
+                        dirs::home_dir().unwrap_or_default().join(".moonshot"),
+                        dirs::home_dir().unwrap_or_default().join(".kimi"),
+                    ],
+                    parse_key_file,
+                    "kimi",
+                )),
+                Box::new(KimiCliResolver::new()),
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Kimi)),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
         ProviderKind::Claude => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(OAuthFileResolver::claude()),
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Anthropic)),
                 Box::new(EnvResolver::new(vec![("ANTHROPIC_API_KEY", "anthropic")])),
             ];
             Box::new(MultiResolver::new(resolvers))
@@ -76,6 +113,7 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
         ProviderKind::Codex => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(OAuthFileResolver::codex()),
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Openai)),
                 Box::new(EnvResolver::new(vec![("OPENAI_API_KEY", "openai")])),
             ];
             Box::new(MultiResolver::new(resolvers))
@@ -219,5 +257,36 @@ fn main() {
 
     if let Err(e) = run_tui(kinds.clone()) {
         eprintln!("Error: {:?}", e);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_key_file_accepts_raw_token_on_first_line() {
+        assert_eq!(parse_key_file("sk-cp-abc\n").as_deref(), Some("sk-cp-abc"));
+    }
+
+    #[test]
+    fn parse_key_file_accepts_api_key_assignment() {
+        assert_eq!(
+            parse_key_file("# my key\napi_key=\"sk-cp-xyz\"\n").as_deref(),
+            Some("sk-cp-xyz")
+        );
+    }
+
+    #[test]
+    fn parse_key_file_skips_comments_and_blanks() {
+        assert_eq!(
+            parse_key_file("\n# comment\n\nsk-live-0\n").as_deref(),
+            Some("sk-live-0")
+        );
+    }
+
+    #[test]
+    fn parse_key_file_empty_returns_none() {
+        assert_eq!(parse_key_file(""), None);
     }
 }

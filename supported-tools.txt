@@ -1,0 +1,42 @@
+# Auth sources quotas knows how to read
+#
+# [x] = credentials are auto-discovered from this source
+# [ ] = known source, not yet wired up (PRs welcome)
+#
+# Legend: SOURCE -> PROVIDER(s) covered
+
+## Native CLIs / apps
+
+[x] Claude Code             ~/.claude/.credentials.json              -> claude
+[x] Claude Code (custom)    $CLAUDE_CONFIG_DIR/.credentials.json     -> claude
+[x] Codex / ChatGPT CLI     ~/.codex/auth.json                       -> codex
+[x] Kimi CLI                ~/.kimi/credentials/kimi-code.json       -> kimi
+[x] opencode                ~/.local/share/opencode/auth.json        -> claude, codex, minimax, kimi, zai
+[x] opencode (XDG)          $XDG_DATA_HOME/opencode/auth.json        -> claude, codex, minimax, kimi, zai
+[x] opencode (config dir)   ~/.config/opencode/auth.json             -> claude, codex, minimax, kimi, zai
+
+## Bare-token files (first line = token, or key=value)
+
+[x] MiniMax                 ~/.minimax                               -> minimax
+[x] Z.ai / GLM              ~/.api-zai                               -> zai
+[x] Kimi / Moonshot         ~/.moonshot, ~/.kimi                     -> kimi
+
+## Environment variables
+
+[x] ANTHROPIC_API_KEY                                                -> claude
+[x] OPENAI_API_KEY                                                   -> codex
+[x] MINIMAX_API_KEY                                                  -> minimax
+[x] ZHIPU_API_KEY / ZAI_API_KEY                                      -> zai
+[x] MOONSHOT_API_KEY / KIMI_API_KEY                                  -> kimi
+
+## Not yet supported (known sources worth adding)
+
+[ ] Crush                   ~/.config/crush/                         -> claude, codex, ...
+[ ] Aider                   ~/.aider.conf.yml                        -> claude, codex, ...
+[ ] Goose                   ~/.config/goose/config.yaml              -> claude, codex, ...
+[ ] Gemini CLI              ~/.gemini/                               -> (gemini provider not yet supported)
+[ ] Cline / Cursor / Cody   (IDE extension storage)                  -> claude, codex, ...
+[ ] GitHub Copilot          ~/.config/github-copilot/                -> (copilot provider not yet supported)
+[ ] OpenRouter              ~/.config/openrouter/ or OPENROUTER_API_KEY -> (openrouter provider not yet supported)
+[ ] Zed                     ~/.config/zed/                           -> claude, codex, ...
+[ ] Continue.dev            ~/.continue/config.json                  -> claude, codex, ...
