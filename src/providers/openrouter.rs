@@ -78,14 +78,8 @@ pub(crate) fn parse_credits(
     let is_free = key_data.is_free_tier.unwrap_or(false);
 
     // Use credits endpoint when available (more accurate total).
-    let total = credits_data
-        .total_credits
-        .or(key_data.limit)
-        .unwrap_or(0.0);
-    let used = credits_data
-        .total_usage
-        .or(key_data.usage)
-        .unwrap_or(0.0);
+    let total = credits_data.total_credits.or(key_data.limit).unwrap_or(0.0);
+    let used = credits_data.total_usage.or(key_data.usage).unwrap_or(0.0);
     let remaining = key_data
         .limit_remaining
         .unwrap_or_else(|| (total - used).max(0.0));

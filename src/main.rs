@@ -255,9 +255,9 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
         ProviderKind::DeepSeek => {
             Box::new(quotas::providers::deepseek::DeepSeekProvider::new(auth))
         }
-        ProviderKind::SiliconFlow => {
-            Box::new(quotas::providers::siliconflow::SiliconFlowProvider::new(auth))
-        }
+        ProviderKind::SiliconFlow => Box::new(
+            quotas::providers::siliconflow::SiliconFlowProvider::new(auth),
+        ),
         ProviderKind::OpenRouter => {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
@@ -266,7 +266,12 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
     // Pre-resolve to capture the auth source string for the detail view.
     // This is a lightweight re-resolve (env var / file read) after any token
     // refresh that already happened in maybe_refresh_creds.
-    let auth_source = provider.auth_resolver().resolve().await.ok().map(|a| a.source);
+    let auth_source = provider
+        .auth_resolver()
+        .resolve()
+        .await
+        .ok()
+        .map(|a| a.source);
 
     let mut result = match provider.fetch().await {
         Ok(r) => r,
@@ -385,51 +390,53 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
 
         if crossterm::event::poll(tick)? {
             match crossterm::event::read()? {
-            Event::Mouse(me) => match me.kind {
-                MouseEventKind::ScrollDown => {
-                    if dashboard.show_detail {
-                        dashboard.scroll_detail(3);
-                    } else {
-                        dashboard.navigate(Direction::Down);
-                    }
-                }
-                MouseEventKind::ScrollUp => {
-                    if dashboard.show_detail {
-                        dashboard.scroll_detail(-3);
-                    } else {
-                        dashboard.navigate(Direction::Up);
-                    }
-                }
-                MouseEventKind::Down(MouseButton::Left) => {
-                    match dashboard.hit_test(me.column, me.row) {
-                        Some(HitResult::Refresh) => {
-                            dashboard.reset_loading();
-                            let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
-                            rx = new_rx;
-                            cur_tx = new_tx;
-                            spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
-                            for t in last_refresh.iter_mut() { *t = Instant::now(); }
+                Event::Mouse(me) => match me.kind {
+                    MouseEventKind::ScrollDown => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(3);
+                        } else {
+                            dashboard.navigate(Direction::Down);
                         }
-                        Some(HitResult::Quit) => return Ok(()),
-                        Some(HitResult::Card(vpos)) => {
-                            if dashboard.selected_index == vpos && !dashboard.show_detail {
-                                // Second click on already-selected card → open detail.
-                                dashboard.show_detail = true;
-                                dashboard.detail_scroll = 0;
-                            } else {
-                                dashboard.selected_index = vpos;
-                                dashboard.show_detail = false;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        if dashboard.show_detail {
+                            dashboard.scroll_detail(-3);
+                        } else {
+                            dashboard.navigate(Direction::Up);
+                        }
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        match dashboard.hit_test(me.column, me.row) {
+                            Some(HitResult::Refresh) => {
+                                dashboard.reset_loading();
+                                let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
+                                rx = new_rx;
+                                cur_tx = new_tx;
+                                spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+                                for t in last_refresh.iter_mut() {
+                                    *t = Instant::now();
+                                }
                             }
+                            Some(HitResult::Quit) => return Ok(()),
+                            Some(HitResult::Card(vpos)) => {
+                                if dashboard.selected_index == vpos && !dashboard.show_detail {
+                                    // Second click on already-selected card → open detail.
+                                    dashboard.show_detail = true;
+                                    dashboard.detail_scroll = 0;
+                                } else {
+                                    dashboard.selected_index = vpos;
+                                    dashboard.show_detail = false;
+                                }
+                            }
+                            None => {}
                         }
-                        None => {}
                     }
-                }
-                MouseEventKind::Moved => {
-                    dashboard.set_mouse_pos(me.column, me.row);
-                }
-                _ => {}
-            },
-            Event::Key(KeyEvent { code, .. }) => match code {
+                    MouseEventKind::Moved => {
+                        dashboard.set_mouse_pos(me.column, me.row);
+                    }
+                    _ => {}
+                },
+                Event::Key(KeyEvent { code, .. }) => match code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
                     KeyCode::Esc | KeyCode::Backspace => {
                         // Esc/Backspace acts as "go back" from detail view.
@@ -444,7 +451,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                         rx = new_rx;
                         cur_tx = new_tx;
                         spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
-                        for t in last_refresh.iter_mut() { *t = Instant::now(); }
+                        for t in last_refresh.iter_mut() {
+                            *t = Instant::now();
+                        }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         if let Some(selected) = dashboard.selected_provider() {
@@ -508,7 +517,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                     }
                     _ => {}
                 },
-            _ => {}
+                _ => {}
             } // end outer match crossterm::event::read()
         } else if !dashboard.all_loaded() {
             dashboard.tick_spinner();

@@ -95,10 +95,10 @@ impl Dashboard {
         let in_rect = |r: Rect| -> bool {
             col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
         };
-        if self.refresh_btn.get().map_or(false, in_rect) {
+        if self.refresh_btn.get().is_some_and(in_rect) {
             return Some(HitResult::Refresh);
         }
-        if self.quit_btn.get().map_or(false, in_rect) {
+        if self.quit_btn.get().is_some_and(in_rect) {
             return Some(HitResult::Quit);
         }
         for &(area, vpos) in self.card_hit_areas.borrow().iter() {
@@ -113,7 +113,7 @@ impl Dashboard {
     pub fn is_entry_done(&self, idx: usize) -> bool {
         self.entries
             .get(idx)
-            .map_or(false, |e| matches!(e, ProviderEntry::Done(_)))
+            .is_some_and(|e| matches!(e, ProviderEntry::Done(_)))
     }
 
     /// Reset a single entry to Refreshing (keeps old data). Used for
@@ -359,19 +359,60 @@ impl Dashboard {
         let n = self.visible_count().max(1);
         let max_cols = (grid_area.width / MIN_CARD_W).max(1) as usize;
         let max_rows = (grid_area.height / MIN_CARD_H).max(1) as usize;
-        let per_page = (max_cols * max_rows).max(1);
 
-        // Helper: actual rows needed with the flow layout (MiniMax spans 2).
-        let flow_rows = |cols: usize| -> usize {
-            if self.stable_order.is_empty() || cols == 0 {
+        // Helper: actual flow rows needed for the first `k` entries at `cols`.
+        let flow_rows_for = |cols: usize, k: usize| -> usize {
+            let total = k.min(self.stable_order.len());
+            if total == 0 || cols == 0 {
                 return 1;
             }
-            Self::flow_placements(&self.entries, &self.stable_order, cols)
+            Self::flow_placements(&self.entries, &self.stable_order[..total], cols)
                 .iter()
                 .map(|(r, _, _)| r + 1)
                 .max()
                 .unwrap_or(1)
         };
+
+        let flow_rows = |cols: usize| flow_rows_for(cols, n);
+
+        // Find the largest page size where:
+        //   (a) flow rows ≤ max_rows, AND
+        //   (b) sum of per-row natural heights ≤ grid_area.height * 1.2
+        //
+        // The height check prevents over-squeezing cards when MiniMax-like
+        // cards inflate a page beyond what looks good.  We allow a 20%
+        // over-budget so a single unavailable card doesn't push neighbours to
+        // the next page when they'd still render fine.
+        let find_fitting_per_page = |cols: usize| -> usize {
+            let mut best = 1usize;
+            for k in 1..=n.min(self.stable_order.len()) {
+                let slice = &self.stable_order[..k];
+                let placements = Self::flow_placements(&self.entries, slice, cols);
+                let nr = placements.iter().map(|(r, _, _)| r + 1).max().unwrap_or(0);
+                if nr > max_rows {
+                    break;
+                }
+                // Sum of max natural height per row.
+                let mut row_h: Vec<u16> = vec![MIN_CARD_H; nr];
+                for (i, &entry_idx) in slice.iter().enumerate() {
+                    let (row_i, _, _) = placements[i];
+                    let h = Self::natural_card_height(&self.entries[entry_idx]);
+                    if h > row_h[row_i] {
+                        row_h[row_i] = h;
+                    }
+                }
+                let total_h: u32 = row_h.iter().map(|h| *h as u32).sum();
+                // Accept if heights fit within 120% of available grid height.
+                if total_h * 5 <= grid_area.height as u32 * 6 {
+                    best = k;
+                } else {
+                    break;
+                }
+            }
+            best.max(1)
+        };
+
+        let per_page = (max_cols * max_rows).max(1);
 
         if n <= per_page {
             // Choose cols balancing terminal aspect.
@@ -401,20 +442,28 @@ impl Dashboard {
             } else {
                 // Try wider layouts; a higher col count may let MiniMax fit
                 // alongside its neighbour instead of wrapping to its own row.
-                let wider = (best_cols..=max_cols)
-                    .find(|&c| flow_rows(c) <= max_rows);
+                let wider = (best_cols..=max_cols).find(|&c| flow_rows(c) <= max_rows);
                 match wider {
                     Some(c) => c,
-                    // Nothing fits on one page — fall through to pagination.
-                    None => return GridLayout { cols: max_cols, per_page },
+                    // Nothing fits on one page — paginate with a corrected per_page.
+                    // max_cols * max_rows over-counts when MiniMax causes extra rows;
+                    // find the actual N that fits.
+                    None => {
+                        let pp = find_fitting_per_page(max_cols);
+                        return GridLayout {
+                            cols: max_cols,
+                            per_page: pp,
+                        };
+                    }
                 }
             };
             GridLayout { cols, per_page: n }
         } else {
-            // Paginate: use max_cols × max_rows
+            // Paginate: use max_cols with a flow-correct per_page.
+            let pp = find_fitting_per_page(max_cols);
             GridLayout {
                 cols: max_cols,
-                per_page,
+                per_page: pp,
             }
         }
     }
@@ -507,7 +556,7 @@ impl Dashboard {
         self.quit_btn.set(Some(quit_rect));
 
         let in_rect = |r: Rect| -> bool {
-            mouse.map_or(false, |(c, row)| {
+            mouse.is_some_and(|(c, row)| {
                 c >= r.x && c < r.x + r.width && row == r.y
             })
         };
@@ -556,8 +605,7 @@ impl Dashboard {
         // Flow-based placement: MiniMax spans 2 columns, all others span 1.
         // This keeps card widths at a consistent unit_col_w so MiniMax is
         // always exactly twice as wide as its neighbours.
-        let placements =
-            Self::flow_placements(&self.entries, &order[page_start..page_end], cols);
+        let placements = Self::flow_placements(&self.entries, &order[page_start..page_end], cols);
         let num_rows = placements
             .iter()
             .map(|(r, _, _)| *r + 1)
@@ -576,16 +624,26 @@ impl Dashboard {
             }
         }
 
-        // Clamp so we don't overflow the grid area.
+        // When natural heights overflow the grid, compress from the tallest rows
+        // downward (down to MIN_CARD_H) rather than scaling everything
+        // proportionally.  Preserving short rows means providers with few
+        // windows keep TwoLine mode (reset lines visible) while taller rows
+        // with many windows gracefully fall back to OneLine.
         let total_fixed: u16 = row_heights.iter().sum();
         if total_fixed > grid_area.height {
-            let weights: Vec<u32> = row_heights.iter().map(|h| *h as u32).collect();
-            let total_w: u32 = weights.iter().sum::<u32>().max(1);
-            let row_constraints: Vec<Constraint> = weights
-                .iter()
-                .map(|w| Constraint::Ratio(*w, total_w))
-                .collect();
-            let _ = Layout::vertical(row_constraints).split(grid_area);
+            // Sort indices largest-first so we shave from the biggest rows.
+            let mut indices: Vec<usize> = (0..row_heights.len()).collect();
+            indices.sort_by(|&a, &b| row_heights[b].cmp(&row_heights[a]));
+            let mut remaining = total_fixed.saturating_sub(grid_area.height);
+            for &idx in &indices {
+                if remaining == 0 {
+                    break;
+                }
+                let can_shrink = row_heights[idx].saturating_sub(MIN_CARD_H);
+                let shrink = remaining.min(can_shrink);
+                row_heights[idx] -= shrink;
+                remaining -= shrink;
+            }
         }
         let mut row_constraints: Vec<Constraint> =
             row_heights.iter().map(|h| Constraint::Length(*h)).collect();
@@ -760,14 +818,20 @@ impl Dashboard {
 
         let header_line = if is_auth || avail_for_fresh == 0 {
             // Auth-required or no space: just the name, slightly dimmed for auth.
-            let style = if is_auth { Style::new().bold().dim() } else { Style::new().bold() };
+            let style = if is_auth {
+                Style::new().bold().dim()
+            } else {
+                Style::new().bold()
+            };
             Line::from(Span::styled(
                 bar::truncate_suffix(&name_part, inner.width as usize),
                 style,
             ))
         } else {
             // Freshness progress bar behind the label text.
-            let elapsed = (chrono::Utc::now() - result.fetched_at).num_seconds().max(0);
+            let elapsed = (chrono::Utc::now() - result.fetched_at)
+                .num_seconds()
+                .max(0);
             let freshness = FreshnessLabel::with_interval(elapsed, result.kind.auto_refresh_secs());
             let fresh_str = &freshness.label;
 
@@ -781,9 +845,9 @@ impl Dashboard {
             let fill_n = fill_n.min(field_w);
 
             let (fg, bg_fill) = match freshness.staleness {
-                Staleness::Fresh   => (Color::Cyan,   Color::Rgb(0, 42, 28)),
-                Staleness::Warning => (Color::Yellow,  Color::Rgb(65, 38, 0)),
-                Staleness::Stale   => (Color::Red,     Color::Rgb(65, 0, 0)),
+                Staleness::Fresh => (Color::Cyan, Color::Rgb(0, 42, 28)),
+                Staleness::Warning => (Color::Yellow, Color::Rgb(65, 38, 0)),
+                Staleness::Stale => (Color::Red, Color::Rgb(65, 0, 0)),
             };
 
             let filled_str: String = text.chars().take(fill_n).collect();
@@ -937,8 +1001,8 @@ impl Dashboard {
         }
 
         // No wrap — lines clip at card width rather than breaking the layout.
-        let paragraph = Paragraph::new(Text::from(lines))
-            .alignment(ratatui::layout::Alignment::Left);
+        let paragraph =
+            Paragraph::new(Text::from(lines)).alignment(ratatui::layout::Alignment::Left);
         f.render_widget(paragraph, inner);
     }
 

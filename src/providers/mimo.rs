@@ -51,10 +51,7 @@ impl MimoProvider {
     async fn detect_base_url(&self, key: &str) -> Result<Option<&'static str>> {
         // Token Plan first — user signed up for the pro plan.
         for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
-            if let Some((status, _)) = self
-                .try_json(key, &format!("{}/models", base))
-                .await?
-            {
+            if let Some((status, _)) = self.try_json(key, &format!("{}/models", base)).await? {
                 if status == 200 {
                     return Ok(Some(base));
                 }

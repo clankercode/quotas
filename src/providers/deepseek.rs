@@ -128,7 +128,11 @@ pub(crate) fn parse_balance(body: &serde_json::Value) -> Result<ProviderQuota> {
     }
 
     let available = resp.is_available.unwrap_or(true);
-    let plan = if available { "DeepSeek API" } else { "DeepSeek API (unavailable)" };
+    let plan = if available {
+        "DeepSeek API"
+    } else {
+        "DeepSeek API (unavailable)"
+    };
 
     Ok(ProviderQuota {
         plan_name: plan.to_string(),

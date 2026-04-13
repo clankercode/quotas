@@ -31,6 +31,10 @@ impl FreshnessLabel {
         } else {
             Staleness::Fresh
         };
-        Self { label, staleness, fraction }
+        Self {
+            label,
+            staleness,
+            fraction,
+        }
     }
 }
