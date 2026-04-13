@@ -1,5 +1,7 @@
 use clap::Parser;
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -15,6 +17,7 @@ use quotas::output::json::JsonOutput;
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
 use quotas::tui::Dashboard;
 use quotas::tui::Direction;
+use quotas::tui::HitResult;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -309,7 +312,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -337,8 +340,51 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
         }
 
         if crossterm::event::poll(tick)? {
-            if let Event::Key(KeyEvent { code, .. }) = crossterm::event::read()? {
-                match code {
+            match crossterm::event::read()? {
+            Event::Mouse(me) => match me.kind {
+                MouseEventKind::ScrollDown => {
+                    if dashboard.show_detail {
+                        dashboard.scroll_detail(3);
+                    } else {
+                        dashboard.navigate(Direction::Down);
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if dashboard.show_detail {
+                        dashboard.scroll_detail(-3);
+                    } else {
+                        dashboard.navigate(Direction::Up);
+                    }
+                }
+                MouseEventKind::Down(MouseButton::Left) => {
+                    match dashboard.hit_test(me.column, me.row) {
+                        Some(HitResult::Refresh) => {
+                            dashboard.reset_loading();
+                            let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
+                            rx = new_rx;
+                            spawn_fetches(&rt, &kinds, config.clone(), new_tx);
+                            last_refresh = Instant::now();
+                        }
+                        Some(HitResult::Quit) => return Ok(()),
+                        Some(HitResult::Card(vpos)) => {
+                            if dashboard.selected_index == vpos && !dashboard.show_detail {
+                                // Second click on already-selected card → open detail.
+                                dashboard.show_detail = true;
+                                dashboard.detail_scroll = 0;
+                            } else {
+                                dashboard.selected_index = vpos;
+                                dashboard.show_detail = false;
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                MouseEventKind::Moved => {
+                    dashboard.set_mouse_pos(me.column, me.row);
+                }
+                _ => {}
+            },
+            Event::Key(KeyEvent { code, .. }) => match code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
                     KeyCode::Esc | KeyCode::Backspace => {
                         // Esc/Backspace acts as "go back" from detail view.
@@ -415,15 +461,20 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                         }
                     }
                     _ => {}
-                }
-            }
+                },
+            _ => {}
+            } // end outer match crossterm::event::read()
         } else if !dashboard.all_loaded() {
             dashboard.tick_spinner();
         }
     })();
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     result
 }

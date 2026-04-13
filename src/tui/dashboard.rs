@@ -5,7 +5,7 @@ use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 #[derive(Clone, Copy)]
 pub enum Direction {
@@ -15,9 +15,23 @@ pub enum Direction {
     Down,
 }
 
+/// Result of a mouse hit-test over the dashboard.
+pub enum HitResult {
+    /// A provider card at the given visual position was clicked.
+    Card(usize),
+    /// The Refresh button was clicked.
+    Refresh,
+    /// The Quit button was clicked.
+    Quit,
+}
+
 #[derive(Clone)]
 pub enum ProviderEntry {
     Loading,
+    /// Stale data from a previous fetch; a refresh is in-flight.
+    /// The card renders the old data with a spinner overlay so users
+    /// don't lose context during refresh.
+    Refreshing(ProviderResult),
     Done(ProviderResult),
 }
 
@@ -43,6 +57,12 @@ pub struct Dashboard {
     /// Cached visual order, locked in when all entries are loaded.
     /// Reset to identity order on first load; refreshes don't reshuffle.
     stable_order: Vec<usize>,
+    // --- mouse support (interior-mutable so render(&self) can update) ---
+    mouse_pos: Cell<Option<(u16, u16)>>,
+    /// (card_area, visual_pos) for each card rendered on the last frame.
+    card_hit_areas: RefCell<Vec<(Rect, usize)>>,
+    refresh_btn: Cell<Option<Rect>>,
+    quit_btn: Cell<Option<Rect>>,
 }
 
 impl Dashboard {
@@ -58,7 +78,36 @@ impl Dashboard {
             spinner_frame: 0,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
+            mouse_pos: Cell::new(None),
+            card_hit_areas: RefCell::new(Vec::new()),
+            refresh_btn: Cell::new(None),
+            quit_btn: Cell::new(None),
         }
+    }
+
+    /// Update the last-known mouse position (used for button hover styling).
+    pub fn set_mouse_pos(&self, col: u16, row: u16) {
+        self.mouse_pos.set(Some((col, row)));
+    }
+
+    /// Hit-test a mouse click at `(col, row)`.
+    /// Returns the action the click should trigger, if any.
+    pub fn hit_test(&self, col: u16, row: u16) -> Option<HitResult> {
+        let in_rect = |r: Rect| -> bool {
+            col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+        };
+        if self.refresh_btn.get().map_or(false, in_rect) {
+            return Some(HitResult::Refresh);
+        }
+        if self.quit_btn.get().map_or(false, in_rect) {
+            return Some(HitResult::Quit);
+        }
+        for &(area, vpos) in self.card_hit_areas.borrow().iter() {
+            if in_rect(area) {
+                return Some(HitResult::Card(vpos));
+            }
+        }
+        None
     }
 
     pub fn scroll_detail(&mut self, delta: i16) {
@@ -105,9 +154,16 @@ impl Dashboard {
 
     pub fn reset_loading(&mut self) {
         for e in &mut self.entries {
-            *e = ProviderEntry::Loading;
+            // Keep old data visible as Refreshing; only truly unloaded entries
+            // stay as Loading.  stable_order is preserved so cards don't move.
+            let old = std::mem::replace(e, ProviderEntry::Loading);
+            *e = match old {
+                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => {
+                    ProviderEntry::Refreshing(r)
+                }
+                ProviderEntry::Loading => ProviderEntry::Loading,
+            };
         }
-        // stable_order intentionally preserved — cards stay in place during refresh.
     }
 
     pub fn tick_spinner(&mut self) {
@@ -124,7 +180,7 @@ impl Dashboard {
         let order = self.visual_order();
         let entry_idx = *order.get(self.selected_index)?;
         match self.entries.get(entry_idx)? {
-            ProviderEntry::Done(r) => Some(r),
+            ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => Some(r),
             ProviderEntry::Loading => None,
         }
     }
@@ -285,10 +341,11 @@ impl Dashboard {
         let page_start = page * layout.per_page;
         let page_end = (page_start + layout.per_page).min(total);
 
+        // Count in-flight fetches (Loading = first-ever load; Refreshing = refresh).
         let loading_count = self
             .entries
             .iter()
-            .filter(|e| matches!(e, ProviderEntry::Loading))
+            .filter(|e| matches!(e, ProviderEntry::Loading | ProviderEntry::Refreshing(_)))
             .count();
 
         let mut header_line = vec![Span::raw(" quotas ").bold().white()];
@@ -308,18 +365,44 @@ impl Dashboard {
             header_line.push(Span::raw("   "));
             header_line.push(Span::raw(format!("page {}/{}", page + 1, pages)).dim());
         }
-        let title = Paragraph::new(vec![
-            Line::from(header_line),
-            Line::from(vec![
-                Span::raw(" ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  Q Quit  · ")
-                    .dim(),
-                Span::raw("▒").fg(Color::DarkGray),
-                Span::raw(" ahead  ").dim(),
-                Span::raw("█").fg(Color::Rgb(255, 140, 0)),
-                Span::raw(" overspend ").dim(),
-            ]),
-        ])
-        .block(Block::new().borders(Borders::NONE));
+
+        // Build the hint line with tracked button positions for mouse clicks/hover.
+        // Char offsets (prefix = 25, R Refresh = 9, middle = 26, Q Quit = 6):
+        //   " ←↑↓→ Nav  Enter Detail  " (25) + "R Refresh" + "  C Copy  PgUp/PgDn Page  " (26) + "Q Quit"
+        let hint_y = title_area.y + 1;
+        let mouse = self.mouse_pos.get();
+        let refresh_rect = Rect::new(title_area.x + 25, hint_y, 9, 1);
+        let quit_rect = Rect::new(title_area.x + 60, hint_y, 6, 1);
+        self.refresh_btn.set(Some(refresh_rect));
+        self.quit_btn.set(Some(quit_rect));
+
+        let in_rect = |r: Rect| -> bool {
+            mouse.map_or(false, |(c, row)| {
+                c >= r.x && c < r.x + r.width && row == r.y
+            })
+        };
+        let btn_style = |r: Rect| -> Style {
+            if in_rect(r) {
+                Style::new().white().bold().underlined()
+            } else {
+                Style::new().dim()
+            }
+        };
+
+        let hint_line = Line::from(vec![
+            Span::raw(" ←↑↓→ Nav  Enter Detail  ").dim(),
+            Span::styled("R Refresh", btn_style(refresh_rect)),
+            Span::raw("  C Copy  PgUp/PgDn Page  ").dim(),
+            Span::styled("Q Quit", btn_style(quit_rect)),
+            Span::raw("  · ").dim(),
+            Span::raw("▒").fg(Color::DarkGray),
+            Span::raw(" ahead  ").dim(),
+            Span::raw("█").fg(Color::Rgb(255, 140, 0)),
+            Span::raw(" overspend ").dim(),
+        ]);
+
+        let title = Paragraph::new(vec![Line::from(header_line), hint_line])
+            .block(Block::new().borders(Borders::NONE));
         f.render_widget(title, title_area);
 
         let footer = Paragraph::new(format!(
@@ -358,10 +441,7 @@ impl Dashboard {
                 .map(|w| Constraint::Ratio(*w, total_w))
                 .collect();
             let row_rects = Layout::vertical(row_constraints).split(grid_area);
-            // (render loop below uses row_rects — we need to go through the
-            // same variable; restructure slightly.)
-            let _ = row_rects; // handled by the non-overflow path below, which
-                               // will produce the same binding; fall through.
+            let _ = row_rects; // handled by the non-overflow path below; fall through.
         }
         let mut row_constraints: Vec<Constraint> =
             row_heights.iter().map(|h| Constraint::Length(*h)).collect();
@@ -370,6 +450,7 @@ impl Dashboard {
         // all_rects has rows+1 entries; last one is the spacer.
         let row_rects = &all_rects[..rows];
 
+        let mut hit_areas: Vec<(Rect, usize)> = Vec::with_capacity(page_end - page_start);
         for (i, visual_pos) in (page_start..page_end).enumerate() {
             let col_i = i % cols;
             let row_i = i / cols;
@@ -384,8 +465,10 @@ impl Dashboard {
             let card_area = Rect::new(x, row_area.y, col_w.saturating_sub(1), row_area.height);
             let selected = visual_pos == self.selected_index;
             let entry_idx = order[visual_pos];
+            hit_areas.push((card_area, visual_pos));
             self.render_entry(f, entry_idx, selected, card_area);
         }
+        *self.card_hit_areas.borrow_mut() = hit_areas;
     }
 
     /// Natural height of a card in rows including the border (2 lines).
@@ -393,7 +476,7 @@ impl Dashboard {
     fn natural_card_height(entry: &ProviderEntry) -> u16 {
         match entry {
             ProviderEntry::Loading => MIN_CARD_H,
-            ProviderEntry::Done(r) => match &r.status {
+            ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => match &r.status {
                 ProviderStatus::Available { quota } => {
                     let visible = quota
                         .windows
@@ -422,7 +505,7 @@ impl Dashboard {
     fn card_weight(entry: &ProviderEntry) -> u32 {
         match entry {
             ProviderEntry::Loading => 4,
-            ProviderEntry::Done(r) => match &r.status {
+            ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => match &r.status {
                 ProviderStatus::Available { quota } => {
                     let visible = quota
                         .windows
@@ -457,8 +540,16 @@ impl Dashboard {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_style(border_style);
-        let inner = block.inner(area);
+        let raw_inner = block.inner(area);
         f.render_widget(block, area);
+
+        // Add 1sp left padding so content doesn't press against the left border.
+        let inner = Rect::new(
+            raw_inner.x + 1,
+            raw_inner.y,
+            raw_inner.width.saturating_sub(1),
+            raw_inner.height,
+        );
 
         match &self.entries[idx] {
             ProviderEntry::Loading => {
@@ -479,6 +570,20 @@ impl Dashboard {
                 ]);
                 let p = Paragraph::new(text).wrap(Wrap { trim: true });
                 f.render_widget(p, inner);
+            }
+            ProviderEntry::Refreshing(result) => {
+                // Show the stale data so the user retains context, then
+                // overlay a small spinner in the top-right of the header row.
+                self.render_done_card(f, result, selected, inner);
+                let spin = format!("{} ", SPINNER[self.spinner_frame]);
+                let spin_w = spin.chars().count() as u16;
+                if inner.width >= spin_w + 2 {
+                    let x = inner.x + inner.width - spin_w;
+                    f.render_widget(
+                        Paragraph::new(Line::from(Span::raw(spin).cyan().dim())),
+                        Rect::new(x, inner.y, spin_w, 1),
+                    );
+                }
             }
             ProviderEntry::Done(result) => {
                 self.render_done_card(f, result, selected, inner);
