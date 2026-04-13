@@ -1,6 +1,6 @@
 [package]
 name = "quotas"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 description = "CLI that auto-detects AI provider credentials (Claude, Codex, MiniMax, Kimi, Z.ai) and shows your usage quotas in a TUI or JSON."
 license = "MIT OR Apache-2.0"
