@@ -48,6 +48,7 @@ impl KimiProvider {
                             limit: 0,
                             remaining: (available * 100.0) as i64,
                             reset_at: None,
+                            period_seconds: None,
                         }],
                         unlimited: false,
                     },
@@ -148,6 +149,7 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
             limit: weekly_limit,
             remaining: weekly_remaining,
             reset_at,
+            period_seconds: Some(7 * 86400),
         });
     }
 
@@ -192,6 +194,20 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
             _ => format!("{}{}", duration, unit_norm.chars().next().unwrap_or(' ')),
         };
 
+        let unit_secs: i64 = match unit_norm {
+            "SECOND" => 1,
+            "MINUTE" => 60,
+            "HOUR" => 3600,
+            "DAY" => 86400,
+            "WEEK" => 7 * 86400,
+            _ => 0,
+        };
+        let period_seconds = if duration > 0 && unit_secs > 0 {
+            Some(duration * unit_secs)
+        } else {
+            None
+        };
+
         let entry_reset = parse_reset(&detail);
         windows.push(QuotaWindow {
             window_type,
@@ -199,6 +215,7 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
             limit,
             remaining,
             reset_at: entry_reset,
+            period_seconds,
         });
     }
 

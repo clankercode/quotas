@@ -33,6 +33,8 @@ pub struct WindowJson {
     pub remaining: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub period_seconds: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -62,6 +64,7 @@ impl JsonOutput {
                                 limit: w.limit,
                                 remaining: w.remaining,
                                 reset_at: w.reset_at,
+                                period_seconds: w.period_seconds,
                             })
                             .collect(),
                         unlimited: quota.unlimited,

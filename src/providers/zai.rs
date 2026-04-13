@@ -140,6 +140,13 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 }
             };
 
+            let period_seconds = match l.unit {
+                3 => Some(5 * 3600),
+                6 => Some(7 * 86400),
+                5 => Some(30 * 86400),
+                _ => None,
+            };
+
             QuotaWindow {
                 window_type,
                 used,
@@ -148,6 +155,7 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 reset_at: l
                     .next_reset_time
                     .and_then(|t| Utc.timestamp_millis_opt(t).single()),
+                period_seconds,
             }
         })
         .collect();

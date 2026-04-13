@@ -58,6 +58,11 @@ pub struct QuotaWindow {
     pub limit: i64,
     pub remaining: i64,
     pub reset_at: Option<DateTime<Utc>>,
+    /// Total length of the rate-limit window, in seconds. Lets the UI
+    /// render a "time elapsed" marker on the quota bar so users can see
+    /// whether they're burning quota faster than the clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

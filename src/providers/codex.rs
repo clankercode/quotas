@@ -108,6 +108,7 @@ fn push_rate_limit_windows(
             limit: 100,
             remaining: 100 - primary_pct,
             reset_at: Utc.timestamp_opt(primary_reset, 0).single(),
+            period_seconds: Some(primary_window_sec),
         });
     }
 
@@ -137,6 +138,7 @@ fn push_rate_limit_windows(
             limit: 100,
             remaining: 100 - secondary_pct,
             reset_at: Utc.timestamp_opt(secondary_reset, 0).single(),
+            period_seconds: Some(secondary_window_sec),
         });
     }
 }
@@ -207,6 +209,7 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
             limit: 0,
             remaining: balance_cents,
             reset_at: None,
+            period_seconds: None,
         });
     }
 

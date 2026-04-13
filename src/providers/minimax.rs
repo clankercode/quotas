@@ -99,6 +99,8 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         weekly_usage: i64,
         #[serde(rename = "weekly_end_time", default)]
         weekly_end_time: i64,
+        #[serde(rename = "weekly_start_time", default)]
+        weekly_start_time: i64,
     }
 
     #[derive(Deserialize)]
@@ -135,12 +137,18 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
             let limit = m.total_count;
             let remaining = (limit - used).max(0);
             let label = format!("5h/{}", short_model_name(&m.model_name));
+            let period_seconds = if m.end_time > m.start_time && m.start_time > 0 {
+                Some((m.end_time - m.start_time) / 1000)
+            } else {
+                Some(18000)
+            };
             windows.push(QuotaWindow {
                 window_type: label,
                 used,
                 limit,
                 remaining,
                 reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
+                period_seconds,
             });
         }
         // Weekly window, same semantics.
@@ -149,12 +157,19 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
             let limit = m.weekly_total;
             let remaining = (limit - used).max(0);
             let label = format!("wk/{}", short_model_name(&m.model_name));
+            let period_seconds =
+                if m.weekly_end_time > m.weekly_start_time && m.weekly_start_time > 0 {
+                    Some((m.weekly_end_time - m.weekly_start_time) / 1000)
+                } else {
+                    Some(7 * 86400)
+                };
             windows.push(QuotaWindow {
                 window_type: label,
                 used,
                 limit,
                 remaining,
                 reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
+                period_seconds,
             });
         }
     }

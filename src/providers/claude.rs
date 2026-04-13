@@ -125,12 +125,17 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
             .as_deref()
             .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&Utc));
+        let period_seconds = match name {
+            "5h" => Some(5 * 3600),
+            _ => Some(7 * 86400),
+        };
         windows.push(QuotaWindow {
             window_type: name.to_string(),
             used,
             limit: 100,
             remaining: (100 - used).max(0),
             reset_at,
+            period_seconds,
         });
     };
 
@@ -156,6 +161,7 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
                     limit: limit_i,
                     remaining: (limit_i - used_i).max(0),
                     reset_at: None,
+                    period_seconds: Some(30 * 86400),
                 });
             }
         }

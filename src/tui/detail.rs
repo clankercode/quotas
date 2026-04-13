@@ -138,18 +138,22 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
     } else {
         Color::Green
     };
-    let bar = big_bar(remaining_pct, bar_width);
+    let time_frac = time_remaining_fraction(w);
+    let bar_spans = marked_big_bar(remaining_pct, time_frac, bar_width, color);
 
     // Row 1: name + bar + % left
-    lines.push(Line::from(vec![
+    let mut l1 = vec![
         Span::raw("  "),
         Span::raw(format!("{:<14} ", truncate(&w.window_type, 14))),
-        Span::styled(bar, Style::new().fg(color)),
-        Span::raw(" "),
+    ];
+    l1.extend(bar_spans);
+    l1.push(Span::raw(" "));
+    l1.push(
         Span::raw(format!("{:>3.0}% left", remaining_pct * 100.0))
             .bold()
             .fg(color),
-    ]));
+    );
+    lines.push(Line::from(l1));
 
     // Row 2: exact numbers
     lines.push(Line::from(vec![
@@ -172,6 +176,103 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
             Span::raw(format!("resets in {} · {}", rel, abs)).dim(),
         ]));
     }
+
+    // Row 4: pace commentary — compare quota-remaining to time-remaining.
+    if let Some(time_frac) = time_frac {
+        let diff = remaining_pct - time_frac;
+        let (label, style) = if diff >= 0.05 {
+            (
+                format!(
+                    "pacing ahead — {:.0}% quota vs {:.0}% time left",
+                    remaining_pct * 100.0,
+                    time_frac * 100.0
+                ),
+                Style::new().green(),
+            )
+        } else if diff <= -0.05 {
+            (
+                format!(
+                    "burning fast — {:.0}% quota vs {:.0}% time left",
+                    remaining_pct * 100.0,
+                    time_frac * 100.0
+                ),
+                Style::new().yellow(),
+            )
+        } else {
+            (
+                format!(
+                    "on pace — {:.0}% quota vs {:.0}% time left",
+                    remaining_pct * 100.0,
+                    time_frac * 100.0
+                ),
+                Style::new().dim(),
+            )
+        };
+        lines.push(Line::from(vec![
+            Span::raw("                 "),
+            Span::styled(label, style),
+        ]));
+    }
+}
+
+fn time_remaining_fraction(w: &QuotaWindow) -> Option<f64> {
+    let reset = w.reset_at?;
+    let period = w.period_seconds?;
+    if period <= 0 {
+        return None;
+    }
+    let remaining = (reset - Utc::now()).num_seconds();
+    if remaining <= 0 {
+        return Some(0.0);
+    }
+    Some((remaining as f64 / period as f64).clamp(0.0, 1.0))
+}
+
+fn marked_big_bar<'a>(
+    remaining_pct: f64,
+    time_remaining_pct: Option<f64>,
+    width: u16,
+    color: Color,
+) -> Vec<Span<'a>> {
+    let w = width as usize;
+    if w == 0 {
+        return Vec::new();
+    }
+    let filled = ((remaining_pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
+    let marker_pos = time_remaining_pct
+        .map(|t| (((t.clamp(0.0, 1.0)) * w as f64).round() as usize).min(w.saturating_sub(1)));
+
+    let bar_style = Style::new().fg(color);
+    let marker_style = Style::new().fg(Color::White).bold();
+
+    let mut out: Vec<Span<'a>> = Vec::new();
+    let mut buf = String::new();
+    let mut in_marker = false;
+
+    for i in 0..w {
+        let is_marker = marker_pos == Some(i);
+        if is_marker != in_marker && !buf.is_empty() {
+            out.push(Span::styled(
+                std::mem::take(&mut buf),
+                if in_marker { marker_style } else { bar_style },
+            ));
+            in_marker = is_marker;
+        }
+        if is_marker {
+            buf.push('┃');
+        } else if i < filled {
+            buf.push('█');
+        } else {
+            buf.push('░');
+        }
+    }
+    if !buf.is_empty() {
+        out.push(Span::styled(
+            buf,
+            if in_marker { marker_style } else { bar_style },
+        ));
+    }
+    out
 }
 
 fn freshness_span<'a>(result: &'a ProviderResult) -> Span<'a> {
@@ -183,23 +284,6 @@ fn freshness_span<'a>(result: &'a ProviderResult) -> Span<'a> {
         Staleness::Stale => Style::new().red(),
     };
     Span::styled(label.label, style)
-}
-
-fn big_bar(pct: f64, width: u16) -> String {
-    let w = width as usize;
-    if w == 0 {
-        return String::new();
-    }
-    let filled = ((pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
-    let empty = w.saturating_sub(filled);
-    let mut s = String::with_capacity(w * 3);
-    for _ in 0..filled {
-        s.push('█');
-    }
-    for _ in 0..empty {
-        s.push('░');
-    }
-    s
 }
 
 fn fmt_exact(n: i64) -> String {

@@ -292,6 +292,13 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
             if let Event::Key(KeyEvent { code, .. }) = crossterm::event::read()? {
                 match code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+                    KeyCode::Esc | KeyCode::Backspace => {
+                        // Esc/Backspace acts as "go back" from detail view.
+                        // From the grid it's a no-op (use Q to quit).
+                        if dashboard.show_detail {
+                            dashboard.show_detail = false;
+                        }
+                    }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         dashboard.reset_loading();
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
