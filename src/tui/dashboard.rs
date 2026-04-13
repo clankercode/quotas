@@ -266,8 +266,10 @@ impl Dashboard {
             Line::from(vec![
                 Span::raw(" ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  Q Quit  · ")
                     .dim(),
-                Span::raw("┃").white().bold(),
-                Span::raw(" = time elapsed ").dim(),
+                Span::raw("▒").fg(Color::DarkGray),
+                Span::raw(" ahead  ").dim(),
+                Span::raw("█").fg(Color::Rgb(255, 140, 0)),
+                Span::raw(" overspend ").dim(),
             ]),
         ])
         .block(Block::new().borders(Borders::NONE));
@@ -309,7 +311,12 @@ impl Dashboard {
             let col_i = i % cols;
             let row_i = i / cols;
             let row_area = row_rects[row_i];
-            let col_w = row_area.width / cols as u16;
+            // Cards actually laid out in this row (partial last row must
+            // stretch its remaining cards across the full row width).
+            let row_start = row_i * cols;
+            let row_end = (row_start + cols).min(page_count);
+            let cards_in_row = (row_end - row_start).max(1);
+            let col_w = row_area.width / cards_in_row as u16;
             let x = row_area.x + col_i as u16 * col_w;
             let card_area = Rect::new(x, row_area.y, col_w.saturating_sub(1), row_area.height);
             let selected = visual_pos == self.selected_index;
@@ -329,12 +336,18 @@ impl Dashboard {
                         .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
                         .count()
                         .max(1) as u32;
+                    // Minimax renders 5h/7d pairs on one line, so its
+                    // vertical footprint is ~half the window count.
+                    let effective = if r.kind == ProviderKind::Minimax {
+                        visible.div_ceil(2)
+                    } else {
+                        visible
+                    };
                     // Score grows with content but is capped so a card
                     // with 30 windows can't monopolize an entire row at
-                    // the expense of the others. Anything over ~6 windows
-                    // switches to compact rendering anyway.
-                    let raw = 4 + visible;
-                    raw.clamp(5, 12)
+                    // the expense of the others.
+                    let raw = 4 + effective;
+                    raw.clamp(5, 10)
                 }
                 _ => 5,
             },
@@ -415,6 +428,15 @@ impl Dashboard {
                     Span::raw(quota.plan_name.clone()).italic().dim(),
                 ));
 
+                if result.kind == ProviderKind::Minimax {
+                    render_minimax_windows(&mut lines, &quota.windows, inner.width);
+                    let paragraph = Paragraph::new(Text::from(lines))
+                        .wrap(Wrap { trim: false })
+                        .alignment(ratatui::layout::Alignment::Left);
+                    f.render_widget(paragraph, inner);
+                    return;
+                }
+
                 let mut visible: Vec<&QuotaWindow> = quota
                     .windows
                     .iter()
@@ -442,11 +464,8 @@ impl Dashboard {
 
                 let (mode, shown_count) = pick_layout(total, usable_for_rows);
 
-                let label_w = match mode {
-                    RenderMode::TwoLine => 12,
-                    RenderMode::OneLine => 11,
-                };
-                let bar_width = inner.width.saturating_sub(label_w as u16 + 12).clamp(6, 32);
+                let label_w: usize = 12;
+                let bar_width = inner.width.saturating_sub(label_w as u16 + 2).clamp(10, 64);
 
                 let mut last_bucket: Option<u8> = None;
                 for w in visible.iter().take(shown_count) {
@@ -458,10 +477,11 @@ impl Dashboard {
                         last_bucket = Some(bucket);
                     }
 
+                    let label_src = bar::display_label(&w.window_type, show_headers);
                     if w.window_type == "payg_balance" {
                         lines.push(Line::from(vec![Span::raw(format!(
                             "{:<width$} ${:.2}",
-                            w.window_type,
+                            label_src,
                             w.remaining as f64 / 100.0,
                             width = label_w
                         ))]));
@@ -473,37 +493,30 @@ impl Dashboard {
                     let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
                     let time_elapsed = bar::time_elapsed_fraction(w);
                     let color = bar::bar_color(used_pct);
-                    let bar_spans = bar::build(used_pct, time_elapsed, bar_width, color);
+                    let overlay = bar_overlay_text(used_pct, w.used, w.limit, bar_width as usize);
+                    let bar_spans =
+                        bar::build_labeled(used_pct, time_elapsed, bar_width, color, &overlay);
 
-                    match mode {
-                        RenderMode::TwoLine => {
-                            let mut l1 = vec![Span::raw(format!(
-                                "{:<width$} ",
-                                truncate(&w.window_type, label_w),
-                                width = label_w
-                            ))];
-                            l1.extend(bar_spans);
-                            l1.push(Span::raw(format!(" {:>3.0}%", used_pct * 100.0)));
-                            lines.push(Line::from(l1));
-                            lines.push(Line::from(vec![Span::raw(format!(
-                                "{:width$}{} / {} left",
-                                "",
-                                format_num(w.remaining),
-                                format_num(w.limit),
-                                width = label_w + 1
-                            ))
-                            .dim()]));
-                        }
-                        RenderMode::OneLine => {
-                            let mut l = vec![Span::raw(format!(
-                                "{:<width$} ",
-                                truncate(&w.window_type, label_w),
-                                width = label_w
-                            ))];
-                            l.extend(bar_spans);
-                            l.push(Span::raw(format!(" {:>3.0}% ", used_pct * 100.0)));
-                            l.push(Span::raw(format_num(w.remaining)).dim());
-                            lines.push(Line::from(l));
+                    let mut l1 = vec![Span::raw(format!(
+                        "{:<width$} ",
+                        bar::truncate_suffix(&label_src, label_w),
+                        width = label_w
+                    ))];
+                    l1.extend(bar_spans);
+                    lines.push(Line::from(l1));
+
+                    if matches!(mode, RenderMode::TwoLine) {
+                        if let Some(reset_at) = w.reset_at {
+                            let rel = humanize_reset(reset_at - chrono::Utc::now());
+                            lines.push(Line::from(
+                                Span::raw(format!(
+                                    "{:width$}resets in {}",
+                                    "",
+                                    rel,
+                                    width = label_w + 1
+                                ))
+                                .dim(),
+                            ));
                         }
                     }
                 }
@@ -636,23 +649,130 @@ fn pick_layout(total: usize, usable_lines: usize) -> (RenderMode, usize) {
     (RenderMode::OneLine, one_fits.min(total))
 }
 
-fn format_num(n: i64) -> String {
-    if n.abs() >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n.abs() >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else {
-        n.to_string()
+/// MiniMax-specific card body: pair each model's 5h and 7d windows onto
+/// a single row `label | 5h bar | 7d bar`, so both periods are visible
+/// at once and the full-width card isn't mostly dead space.
+fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], inner_w: u16) {
+    // Preserve input order of first sighting so the provider's ranking
+    // (coding plans first, then everything else) survives.
+    let mut order: Vec<String> = Vec::new();
+    let mut pairs: std::collections::HashMap<String, (Option<&QuotaWindow>, Option<&QuotaWindow>)> =
+        std::collections::HashMap::new();
+
+    for w in windows {
+        let (model, is_five) = if let Some(rest) = w.window_type.strip_prefix("5h/") {
+            (rest.to_string(), true)
+        } else if let Some(rest) = w.window_type.strip_prefix("wk/") {
+            (rest.to_string(), false)
+        } else if let Some(rest) = w.window_type.strip_prefix("7d/") {
+            (rest.to_string(), false)
+        } else {
+            continue;
+        };
+        if !pairs.contains_key(&model) {
+            order.push(model.clone());
+        }
+        let slot = pairs.entry(model).or_insert((None, None));
+        if is_five {
+            slot.0 = Some(w);
+        } else {
+            slot.1 = Some(w);
+        }
+    }
+
+    if order.is_empty() {
+        return;
+    }
+
+    let label_w: usize = 20;
+    // Reserve: label + trailing space + gap between bars (2 chars).
+    let reserved = label_w as u16 + 1 + 2;
+    let avail = inner_w.saturating_sub(reserved);
+    let bar_w: u16 = (avail / 2).clamp(10, 90);
+
+    // Column header row.
+    let header_5h = format!("{:^w$}", "── 5h ──", w = bar_w as usize);
+    let header_7d = format!("{:^w$}", "── 7d ──", w = bar_w as usize);
+    lines.push(Line::from(vec![
+        Span::raw(format!("{:<w$} ", "", w = label_w)),
+        Span::raw(header_5h).dim(),
+        Span::raw("  "),
+        Span::raw(header_7d).dim(),
+    ]));
+
+    for model in &order {
+        let (five, seven) = pairs.get(model).copied().unwrap_or((None, None));
+        let label = bar::truncate_suffix(model, label_w);
+        let mut spans: Vec<Span<'_>> = vec![Span::raw(format!("{:<w$} ", label, w = label_w))];
+
+        spans.extend(minimax_bar_cell(five, bar_w));
+        spans.push(Span::raw("  "));
+        spans.extend(minimax_bar_cell(seven, bar_w));
+
+        lines.push(Line::from(spans));
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
+fn minimax_bar_cell(win: Option<&QuotaWindow>, bar_w: u16) -> Vec<Span<'static>> {
+    match win {
+        Some(w) if w.limit > 0 => {
+            let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
+            let time_elapsed = bar::time_elapsed_fraction(w);
+            let color = bar::bar_color(used_pct);
+            let overlay = bar_overlay_text(used_pct, w.used, w.limit, bar_w as usize);
+            bar::build_labeled(used_pct, time_elapsed, bar_w, color, &overlay)
+        }
+        _ => vec![Span::raw(format!("{:w$}", "", w = bar_w as usize))],
+    }
+}
+
+fn bar_overlay_text(used_pct: f64, used: i64, limit: i64, bar_width: usize) -> String {
+    let pct = format!("{:.0}%", used_pct * 100.0);
+    if bar_width < 10 {
+        return pct;
+    }
+    let nums = format!("{}/{}", format_num(used), format_num(limit));
+    let compact = format!("{} {}", pct, nums);
+    if compact.chars().count() + 2 <= bar_width {
+        format!("{} ({})", pct, nums)
+    } else if compact.chars().count() <= bar_width {
+        compact
     } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
-        out
+        pct
+    }
+}
+
+fn humanize_reset(d: chrono::Duration) -> String {
+    let secs = d.num_seconds();
+    if secs <= 0 {
+        return "now".to_string();
+    }
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    if days > 0 {
+        format!("{}d {}h", days, hours)
+    } else if hours > 0 {
+        format!("{}h {}m", hours, mins)
+    } else {
+        format!("{}m", mins.max(1))
+    }
+}
+
+fn format_num(n: i64) -> String {
+    fn trim_trailing_zero(s: String) -> String {
+        if let Some(stripped) = s.strip_suffix(".0") {
+            stripped.to_string()
+        } else {
+            s
+        }
+    }
+    if n.abs() >= 1_000_000 {
+        trim_trailing_zero(format!("{:.1}", n as f64 / 1_000_000.0)) + "M"
+    } else if n.abs() >= 1_000 {
+        trim_trailing_zero(format!("{:.1}", n as f64 / 1_000.0)) + "k"
+    } else {
+        n.to_string()
     }
 }
 
@@ -664,12 +784,8 @@ mod tests {
     fn format_num_scales() {
         assert_eq!(format_num(500), "500");
         assert_eq!(format_num(1_500), "1.5k");
+        assert_eq!(format_num(2_000), "2k");
+        assert_eq!(format_num(150_000), "150k");
         assert_eq!(format_num(2_500_000), "2.5M");
-    }
-
-    #[test]
-    fn truncate_short_unchanged() {
-        assert_eq!(truncate("hi", 8), "hi");
-        assert_eq!(truncate("abcdefghij", 5), "abcd…");
     }
 }

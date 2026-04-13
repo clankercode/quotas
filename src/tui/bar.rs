@@ -32,33 +32,21 @@ pub fn bar_color(used_pct: f64) -> Color {
     }
 }
 
-/// Build the dual-info bar: fill grows left-to-right with `used_pct`;
-/// any portion used *beyond* the elapsed-time fraction is drawn in
-/// orange to flag overspending; the gap between used and elapsed when
-/// used < elapsed is shown as a dim "slack" region so it's visible that
-/// you're pacing ahead.
-pub fn build<'a>(
-    used_pct: f64,
-    time_elapsed_pct: Option<f64>,
-    width: u16,
-    base_color: Color,
-) -> Vec<Span<'a>> {
-    let w = width as usize;
-    if w == 0 {
-        return Vec::new();
-    }
-    let used_cells = ((used_pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
-    let time_cells = time_elapsed_pct.map(|t| ((t.clamp(0.0, 1.0)) * w as f64).round() as usize);
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cell {
+    OnPace,
+    Overspend,
+    Slack,
+    Future,
+}
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    enum Cell {
-        OnPace,
-        Overspend,
-        Slack,
-        Future,
-    }
+const OVERSPEND_RGB: Color = Color::Rgb(255, 140, 0);
 
-    let cells: Vec<Cell> = (0..w)
+fn cells_for(used_pct: f64, time_elapsed_pct: Option<f64>, width: usize) -> Vec<Cell> {
+    let used_cells = ((used_pct.clamp(0.0, 1.0)) * width as f64).round() as usize;
+    let time_cells =
+        time_elapsed_pct.map(|t| ((t.clamp(0.0, 1.0)) * width as f64).round() as usize);
+    (0..width)
         .map(|i| {
             let is_used = i < used_cells;
             let past_time = match time_cells {
@@ -72,42 +60,99 @@ pub fn build<'a>(
                 (false, false) => Cell::Future,
             }
         })
-        .collect();
+        .collect()
+}
 
-    let on_pace = Style::new().fg(base_color);
-    let overspend = Style::new().fg(Color::Rgb(255, 140, 0));
-    let slack = Style::new().fg(Color::DarkGray);
-    let future = Style::new().fg(Color::DarkGray);
+/// Build the dual-info bar: fill grows left-to-right with `used_pct`;
+/// any portion used *beyond* the elapsed-time fraction is drawn in
+/// orange to flag overspending; the gap between used and elapsed when
+/// used < elapsed is shown as a dim "slack" region so it's visible that
+/// you're pacing ahead.
+pub fn build<'a>(
+    used_pct: f64,
+    time_elapsed_pct: Option<f64>,
+    width: u16,
+    base_color: Color,
+) -> Vec<Span<'a>> {
+    build_labeled(used_pct, time_elapsed_pct, width, base_color, "")
+}
 
-    let char_for = |c: Cell| match c {
+/// Like `build`, but with an overlay string centered in the bar. Cells
+/// under the overlay replace their block char with the overlay char and
+/// take a background color matching the underlying fill so the text
+/// reads as a label sitting on the bar.
+pub fn build_labeled<'a>(
+    used_pct: f64,
+    time_elapsed_pct: Option<f64>,
+    width: u16,
+    base_color: Color,
+    overlay: &str,
+) -> Vec<Span<'a>> {
+    let w = width as usize;
+    if w == 0 {
+        return Vec::new();
+    }
+    let cells = cells_for(used_pct, time_elapsed_pct, w);
+
+    let overlay_chars: Vec<char> = overlay.chars().collect();
+    let overlay_len = overlay_chars.len().min(w);
+    // Anchor the overlay at the fill/empty boundary so the text hugs the
+    // interesting visual edge. Fill ~0% → left-aligned; fill ~100% →
+    // right-aligned; fill ~50% → centered. Avoids the floating-text
+    // problem when a wide bar has only a few cells filled.
+    let used_cells = ((used_pct.clamp(0.0, 1.0)) * w as f64).round() as usize;
+    let overlay_start = if overlay_len == 0 {
+        w
+    } else {
+        let half = overlay_len / 2;
+        let raw = used_cells.saturating_sub(half);
+        raw.min(w - overlay_len)
+    };
+    let overlay_end = overlay_start + overlay_len;
+
+    let base_char_for = |c: Cell| match c {
         Cell::OnPace | Cell::Overspend => '█',
         Cell::Slack => '▒',
         Cell::Future => '░',
     };
-    let style_for = |c: Cell| match c {
-        Cell::OnPace => on_pace,
-        Cell::Overspend => overspend,
-        Cell::Slack => slack,
-        Cell::Future => future,
+    let base_style_for = |c: Cell| match c {
+        Cell::OnPace => Style::new().fg(base_color),
+        Cell::Overspend => Style::new().fg(OVERSPEND_RGB),
+        Cell::Slack => Style::new().fg(Color::DarkGray),
+        Cell::Future => Style::new().fg(Color::DarkGray),
+    };
+    let overlay_style_for = |c: Cell| match c {
+        Cell::OnPace => Style::new().bg(base_color).fg(Color::Black).bold(),
+        Cell::Overspend => Style::new().bg(OVERSPEND_RGB).fg(Color::Black).bold(),
+        Cell::Slack => Style::new().bg(Color::DarkGray).fg(Color::White).bold(),
+        Cell::Future => Style::new().fg(Color::White).bold(),
     };
 
     let mut out: Vec<Span<'a>> = Vec::new();
     let mut buf = String::new();
-    let mut cur_style = style_for(cells[0]);
-    buf.push(char_for(cells[0]));
-    for cell in cells.iter().skip(1).copied() {
-        let s = style_for(cell);
-        if s == cur_style {
-            buf.push(char_for(cell));
+    let mut cur_style: Option<Style> = None;
+    let flush = |buf: &mut String, out: &mut Vec<Span<'a>>, style: Option<Style>| {
+        if !buf.is_empty() {
+            out.push(Span::styled(std::mem::take(buf), style.unwrap_or_default()));
+        }
+    };
+    for i in 0..w {
+        let cell = cells[i];
+        let in_overlay = i >= overlay_start && i < overlay_end;
+        let (ch, style) = if in_overlay {
+            (overlay_chars[i - overlay_start], overlay_style_for(cell))
         } else {
-            out.push(Span::styled(std::mem::take(&mut buf), cur_style));
-            cur_style = s;
-            buf.push(char_for(cell));
+            (base_char_for(cell), base_style_for(cell))
+        };
+        if cur_style == Some(style) {
+            buf.push(ch);
+        } else {
+            flush(&mut buf, &mut out, cur_style);
+            cur_style = Some(style);
+            buf.push(ch);
         }
     }
-    if !buf.is_empty() {
-        out.push(Span::styled(buf, cur_style));
-    }
+    flush(&mut buf, &mut out, cur_style);
     out
 }
 
@@ -141,6 +186,53 @@ pub fn bucket_label(bucket: u8) -> Option<&'static str> {
         8 => Some("── credits ──"),
         _ => None,
     }
+}
+
+/// When a section header is active for a bucket, the window's own
+/// bucket prefix (`5h/`, `wk/`, `7d/`, `monthly_`, etc.) is redundant.
+/// Strip it so more of the model name fits. Also applies a small
+/// provider-agnostic rename table so ugly names read better in the UI.
+/// If stripping would leave an empty string, keep the original.
+pub fn display_label(window_type: &str, show_headers: bool) -> String {
+    // First, the rename table — applies regardless of show_headers
+    // because these are purely cosmetic improvements to the raw key.
+    let renamed: &str = match window_type {
+        "weekly" => "7d",
+        "weekly_sonnet" => "7d Sonnet",
+        "weekly_opus" => "7d Opus",
+        "weekly_haiku" => "7d Haiku",
+        "monthly_mcp" => "month MCP",
+        "monthly" => "month",
+        "extra_credits" => "credits",
+        "payg_balance" => "PAYG",
+        other => other,
+    };
+    if !show_headers {
+        return renamed.to_string();
+    }
+    for prefix in ["5h/", "wk/", "7d/", "weekly/", "monthly/", "monthly_"] {
+        if let Some(rest) = renamed.strip_prefix(prefix) {
+            if !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+    renamed.to_string()
+}
+
+/// Suffix-preserving truncation: keeps the *end* of the string so that
+/// `coding-plan-vlm` and `coding-plan-search` stay distinguishable when
+/// forced to share a narrow label column. Unicode-safe.
+pub fn truncate_suffix(s: &str, n: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= n {
+        return s.to_string();
+    }
+    let keep = n.saturating_sub(1);
+    let skip = char_count - keep;
+    let mut out = String::from("…");
+    out.extend(s.chars().skip(skip));
+    out
 }
 
 #[cfg(test)]

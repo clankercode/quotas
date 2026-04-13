@@ -67,7 +67,7 @@ impl DetailView {
                             }
                             last_bucket = Some(bucket);
                         }
-                        render_window(&mut lines, window, bar_width);
+                        render_window(&mut lines, window, bar_width, show_headers);
                         lines.push(Line::from(""));
                     }
                 }
@@ -134,12 +134,13 @@ impl DetailView {
     }
 }
 
-fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
+fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, show_headers: bool) {
+    let label_src = bar::display_label(&w.window_type, show_headers);
     // Special-case the payg balance row: no bar, just a dollar figure.
     if w.window_type == "payg_balance" {
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::raw(format!("{:<14} ", w.window_type)),
+            Span::raw(format!("{:<14} ", bar::truncate_suffix(&label_src, 14))),
             Span::raw(format!("${:.2}", w.remaining as f64 / 100.0)).bold(),
         ]));
         return;
@@ -155,7 +156,7 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16) {
     // Row 1: name + bar + % used
     let mut l1 = vec![
         Span::raw("  "),
-        Span::raw(format!("{:<14} ", truncate(&w.window_type, 14))),
+        Span::raw(format!("{:<14} ", bar::truncate_suffix(&label_src, 14))),
     ];
     l1.extend(bar_spans);
     l1.push(Span::raw(" "));
@@ -269,16 +270,6 @@ fn humanize_duration(d: chrono::Duration) -> String {
         format!("{}h {}m", hours, mins)
     } else {
         format!("{}m", mins.max(1))
-    }
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
-        out.push('…');
-        out
     }
 }
 

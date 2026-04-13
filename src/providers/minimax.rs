@@ -131,11 +131,13 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
 
     let mut windows: Vec<QuotaWindow> = Vec::new();
     for m in ordered {
-        // 5h window — usage_count is USED, total_count is the cap.
+        // 5h window. NOTE: despite its name, `current_interval_usage_count`
+        // is the count REMAINING, not consumed — same quirk as `remains_time`.
+        // Verified against the openclaw minimax-usage.sh reference implementation.
         if m.total_count > 0 {
-            let used = m.usage_count;
             let limit = m.total_count;
-            let remaining = (limit - used).max(0);
+            let remaining = m.usage_count.clamp(0, limit);
+            let used = limit - remaining;
             let label = format!("5h/{}", short_model_name(&m.model_name));
             let period_seconds = if m.end_time > m.start_time && m.start_time > 0 {
                 Some((m.end_time - m.start_time) / 1000)
@@ -151,11 +153,11 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 period_seconds,
             });
         }
-        // Weekly window, same semantics.
+        // Weekly window — same inverted-naming quirk as the 5h field above.
         if m.weekly_total > 0 {
-            let used = m.weekly_usage;
             let limit = m.weekly_total;
-            let remaining = (limit - used).max(0);
+            let remaining = m.weekly_usage.clamp(0, limit);
+            let used = limit - remaining;
             let label = format!("wk/{}", short_model_name(&m.model_name));
             let period_seconds =
                 if m.weekly_end_time > m.weekly_start_time && m.weekly_start_time > 0 {
@@ -256,17 +258,18 @@ mod tests {
         assert!(quota.plan_name.contains("M2.7"));
         // One 5h + one weekly window for the single model.
         assert_eq!(quota.windows.len(), 2);
+        // usage_count fields are REMAINING, not used (API naming quirk).
         let five = &quota.windows[0];
         assert!(five.window_type.starts_with("5h"));
         assert_eq!(five.limit, 200);
-        assert_eq!(five.used, 187);
-        assert_eq!(five.remaining, 13);
+        assert_eq!(five.remaining, 187);
+        assert_eq!(five.used, 13);
         assert!(five.reset_at.is_some());
         let weekly = &quota.windows[1];
         assert!(weekly.window_type.starts_with("wk"));
         assert_eq!(weekly.limit, 1000);
-        assert_eq!(weekly.used, 850);
-        assert_eq!(weekly.remaining, 150);
+        assert_eq!(weekly.remaining, 850);
+        assert_eq!(weekly.used, 150);
     }
 
     #[test]
