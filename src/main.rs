@@ -18,7 +18,7 @@ use quotas::tui::Direction;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(name = "quotas")]
@@ -29,6 +29,11 @@ struct Args {
 
     #[arg(long)]
     pretty: bool,
+
+    /// Print the raw JSON response from each provider (pretty) and exit.
+    /// Useful for inspecting fields we may not be parsing yet.
+    #[arg(long)]
+    raw: bool,
 
     #[arg(long, value_delimiter = ',')]
     provider: Vec<String>,
@@ -250,7 +255,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
         .enable_all()
         .worker_threads(2)
         .build()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        .map_err(io::Error::other)?;
 
     let mut dashboard = Dashboard::new_loading(kinds.clone());
 
@@ -262,6 +267,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
     spawn_fetches(&rt, &kinds, config.clone(), tx);
+    let mut last_refresh = Instant::now();
+    let auto_refresh_interval = Duration::from_secs(150);
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
@@ -269,6 +276,16 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
 
         while let Ok((idx, result)) = rx.try_recv() {
             dashboard.update(idx, result);
+        }
+
+        // Auto-refresh every 2.5 minutes once the previous batch has
+        // settled. The user doesn't have to press R to stay current.
+        if dashboard.all_loaded() && last_refresh.elapsed() >= auto_refresh_interval {
+            dashboard.reset_loading();
+            let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
+            rx = new_rx;
+            spawn_fetches(&rt, &kinds, config.clone(), new_tx);
+            last_refresh = Instant::now();
         }
 
         if crossterm::event::poll(tick)? {
@@ -280,6 +297,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                         rx = new_rx;
                         spawn_fetches(&rt, &kinds, config.clone(), new_tx);
+                        last_refresh = Instant::now();
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         if let Some(selected) = dashboard.selected_provider() {
@@ -317,6 +335,33 @@ fn main() {
     let args = Args::parse();
     let kinds = filter_kinds(&args.provider);
     let config = Config::load();
+
+    if args.raw {
+        let results = fetch_all(kinds, &config);
+        let mut map = serde_json::Map::new();
+        for r in results {
+            let key = r.kind.slug().to_string();
+            let value = match r.raw_response {
+                Some(v) => v,
+                None => serde_json::json!({
+                    "status": match r.status {
+                        quotas::providers::ProviderStatus::AuthRequired => "auth_required",
+                        quotas::providers::ProviderStatus::NetworkError { .. } => "network_error",
+                        quotas::providers::ProviderStatus::Unavailable { .. } => "unavailable",
+                        quotas::providers::ProviderStatus::Available { .. } => "available_no_raw",
+                    },
+                    "note": "no raw response captured"
+                }),
+            };
+            map.insert(key, value);
+        }
+        let wrapped = serde_json::Value::Object(map);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&wrapped).unwrap_or_default()
+        );
+        return;
+    }
 
     if args.json {
         let results = fetch_all(kinds, &config);

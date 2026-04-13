@@ -91,6 +91,15 @@ struct Utilization {
     seven_day_opus: Option<RateLimit>,
     seven_day_sonnet: Option<RateLimit>,
     seven_day_oauth_apps: Option<RateLimit>,
+    extra_usage: Option<ExtraUsage>,
+}
+
+#[derive(Deserialize)]
+struct ExtraUsage {
+    #[serde(default)]
+    is_enabled: bool,
+    monthly_limit: Option<f64>,
+    used_credits: Option<f64>,
 }
 
 pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
@@ -100,6 +109,7 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         seven_day_opus: None,
         seven_day_sonnet: None,
         seven_day_oauth_apps: None,
+        extra_usage: None,
     });
 
     let mut windows: Vec<QuotaWindow> = Vec::new();
@@ -133,6 +143,23 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         "weekly_oauth_apps",
         parsed.seven_day_oauth_apps,
     );
+
+    // Extra usage (monthly paid credits topping up the base plan).
+    if let Some(extra) = parsed.extra_usage {
+        if extra.is_enabled {
+            if let (Some(limit), Some(used)) = (extra.monthly_limit, extra.used_credits) {
+                let limit_i = limit.round() as i64;
+                let used_i = used.round() as i64;
+                windows.push(QuotaWindow {
+                    window_type: "extra_credits".to_string(),
+                    used: used_i,
+                    limit: limit_i,
+                    remaining: (limit_i - used_i).max(0),
+                    reset_at: None,
+                });
+            }
+        }
+    }
 
     ProviderQuota {
         plan_name: "Claude (Max/Pro)".to_string(),

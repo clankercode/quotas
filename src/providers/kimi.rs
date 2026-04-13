@@ -183,7 +183,7 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
         let unit_norm = unit.trim_start_matches("TIME_UNIT_");
 
         let window_type = match (duration, unit_norm) {
-            (300, u) if u == "MINUTE" => "5h".to_string(),
+            (300, "MINUTE") => "5h".to_string(),
             (0, _) => detail
                 .get("name")
                 .and_then(|v| v.as_str())

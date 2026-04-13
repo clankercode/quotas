@@ -270,17 +270,53 @@ impl Dashboard {
         let cols = layout.cols.min(page_count.max(1));
         let rows = page_count.div_ceil(cols);
 
-        let card_w = grid_area.width / cols as u16;
-        let card_h = grid_area.height / rows as u16;
+        // Row heights are weighted by the max content weight of any card in
+        // that row, so a row containing a minimax card with 10 windows gets
+        // more vertical space than a row of single-window zai/claude cards.
+        let mut row_weights: Vec<u32> = vec![1; rows];
+        for (i, entry_idx) in (page_start..page_end).enumerate() {
+            let row_i = i / cols;
+            let w = Self::card_weight(&self.entries[entry_idx]);
+            if w > row_weights[row_i] {
+                row_weights[row_i] = w;
+            }
+        }
+        let total_weight: u32 = row_weights.iter().sum::<u32>().max(1);
+        let row_constraints: Vec<Constraint> = row_weights
+            .iter()
+            .map(|w| Constraint::Ratio(*w, total_weight))
+            .collect();
+        let row_rects = Layout::vertical(row_constraints).split(grid_area);
 
         for (i, entry_idx) in (page_start..page_end).enumerate() {
             let col_i = i % cols;
             let row_i = i / cols;
-            let x = grid_area.x + col_i as u16 * card_w;
-            let y = grid_area.y + row_i as u16 * card_h;
-            let card_area = Rect::new(x, y, card_w.saturating_sub(1), card_h);
+            let row_area = row_rects[row_i];
+            let col_w = row_area.width / cols as u16;
+            let x = row_area.x + col_i as u16 * col_w;
+            let card_area = Rect::new(x, row_area.y, col_w.saturating_sub(1), row_area.height);
             let selected = entry_idx == self.selected_index;
             self.render_entry(f, entry_idx, selected, card_area);
+        }
+    }
+
+    fn card_weight(entry: &ProviderEntry) -> u32 {
+        match entry {
+            ProviderEntry::Loading => 3,
+            ProviderEntry::Done(r) => match &r.status {
+                ProviderStatus::Available { quota } => {
+                    let visible = quota
+                        .windows
+                        .iter()
+                        .filter(|w| w.limit > 0 || w.window_type == "payg_balance")
+                        .count()
+                        .max(1);
+                    // header + plan line + 2 lines per window, clamped
+                    // so a single-window card is still readable.
+                    (3 + visible as u32 * 2).clamp(5, 32)
+                }
+                _ => 4,
+            },
         }
     }
 
@@ -380,17 +416,20 @@ impl Dashboard {
                         lines.push(Line::from(""));
                         continue;
                     }
-                    let pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
-                    let bar = inline_bar(pct, bar_width);
-                    let color = bar_color(pct);
+                    let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
+                    let remaining_pct = 1.0 - used_pct;
+                    // Bar fill = what's LEFT, so the visual shrinks as quota
+                    // gets burned down. Matches the "N% left" label next to it.
+                    let bar = inline_bar(remaining_pct, bar_width);
+                    let color = bar_color(remaining_pct);
                     lines.push(Line::from(vec![
-                        Span::raw(format!("{:<8} ", truncate(&w.window_type, 8))),
+                        Span::raw(format!("{:<12} ", truncate(&w.window_type, 12))),
                         Span::styled(bar, Style::new().fg(color)),
-                        Span::raw(format!(" {:>3.0}%", (1.0 - pct) * 100.0)),
+                        Span::raw(format!(" {:>3.0}%", remaining_pct * 100.0)),
                     ]));
                     lines.push(Line::from(vec![Span::raw(format!(
-                        "         {}/{} left",
-                        format_num(w.limit - w.used),
+                        "             {} / {} left",
+                        format_num(w.remaining),
                         format_num(w.limit)
                     ))
                     .dim()]));
@@ -468,17 +507,16 @@ impl Dashboard {
 
         if let Some(selected) = self.selected_provider() {
             let view = DetailView::new(selected.clone());
-            let text = view.render();
-
             let detail_area = Rect::new(
                 area.x,
                 area.y + 2,
                 area.width,
                 area.height.saturating_sub(3),
             );
+            let text = view.render(detail_area.width);
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))
-                .wrap(Wrap { trim: true })
+                .wrap(Wrap { trim: false })
                 .scroll((0, 0));
             f.render_widget(paragraph, detail_area);
         } else {
@@ -514,10 +552,12 @@ fn inline_bar(pct: f64, width: u16) -> String {
     s
 }
 
-fn bar_color(pct: f64) -> Color {
-    if pct >= 0.9 {
+fn bar_color(remaining_pct: f64) -> Color {
+    // Colors reflect the *remaining* fraction — healthy when lots of quota
+    // left, red when almost exhausted.
+    if remaining_pct <= 0.10 {
         Color::Red
-    } else if pct >= 0.75 {
+    } else if remaining_pct <= 0.25 {
         Color::Yellow
     } else {
         Color::Green

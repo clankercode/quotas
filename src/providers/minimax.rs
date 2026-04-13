@@ -83,14 +83,22 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
     #[allow(dead_code)]
     struct ModelRemain {
         model_name: String,
+        #[serde(default)]
         start_time: i64,
+        #[serde(default)]
         end_time: i64,
         #[serde(default)]
         remains_time: i64,
-        #[serde(rename = "current_interval_total_count")]
+        #[serde(rename = "current_interval_total_count", default)]
         total_count: i64,
-        #[serde(rename = "current_interval_usage_count")]
+        #[serde(rename = "current_interval_usage_count", default)]
         usage_count: i64,
+        #[serde(rename = "current_weekly_total_count", default)]
+        weekly_total: i64,
+        #[serde(rename = "current_weekly_usage_count", default)]
+        weekly_usage: i64,
+        #[serde(rename = "weekly_end_time", default)]
+        weekly_end_time: i64,
     }
 
     #[derive(Deserialize)]
@@ -101,33 +109,76 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
     let resp: Response = serde_json::from_value(body.clone())
         .map_err(|e| Error::Provider(format!("parse error: {}", e)))?;
 
-    let windows: Vec<QuotaWindow> = resp
-        .model_remains
-        .iter()
-        .map(|m| {
-            let remaining = m.usage_count;
-            let used = m.total_count - m.usage_count;
-            QuotaWindow {
-                window_type: "5h".to_string(),
-                used,
-                limit: m.total_count,
-                remaining,
-                reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
-            }
-        })
-        .collect();
+    // Prefer the coding-plan / MiniMax-M* model as the "primary" card model.
+    // Others (TTS / image / music / video) are still surfaced but sorted after.
+    let is_coding = |name: &str| {
+        let n = name.to_ascii_lowercase();
+        n.starts_with("minimax-m") || n.starts_with("coding-plan")
+    };
 
     let plan_name = resp
         .model_remains
-        .first()
+        .iter()
+        .find(|m| is_coding(&m.model_name))
+        .or_else(|| resp.model_remains.first())
         .map(|m| m.model_name.clone())
-        .unwrap_or_else(|| "Token Plan".to_string());
+        .unwrap_or_else(|| "MiniMax Coding Plan".to_string());
+
+    let mut ordered: Vec<&ModelRemain> = resp.model_remains.iter().collect();
+    ordered.sort_by_key(|m| if is_coding(&m.model_name) { 0 } else { 1 });
+
+    let mut windows: Vec<QuotaWindow> = Vec::new();
+    for m in ordered {
+        // 5h window — usage_count is USED, total_count is the cap.
+        if m.total_count > 0 {
+            let used = m.usage_count;
+            let limit = m.total_count;
+            let remaining = (limit - used).max(0);
+            let label = format!("5h/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
+            });
+        }
+        // Weekly window, same semantics.
+        if m.weekly_total > 0 {
+            let used = m.weekly_usage;
+            let limit = m.weekly_total;
+            let remaining = (limit - used).max(0);
+            let label = format!("wk/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
+            });
+        }
+    }
 
     Ok(ProviderQuota {
-        plan_name,
+        plan_name: format!("MiniMax · {}", plan_name),
         windows,
         unlimited: false,
     })
+}
+
+fn short_model_name(name: &str) -> String {
+    // Strip common prefixes and length-limit for compact labels.
+    let s = name
+        .strip_prefix("MiniMax-")
+        .or_else(|| name.strip_prefix("minimax-"))
+        .unwrap_or(name);
+    if s.chars().count() > 18 {
+        let mut out: String = s.chars().take(17).collect();
+        out.push('…');
+        out
+    } else {
+        s.to_string()
+    }
 }
 
 #[async_trait]
@@ -178,17 +229,61 @@ mod tests {
                 "end_time": 1712955600000i64,
                 "remains_time": 14400000i64,
                 "current_interval_total_count": 200,
-                "current_interval_usage_count": 187
+                "current_interval_usage_count": 187,
+                "current_weekly_total_count": 1000,
+                "current_weekly_usage_count": 850,
+                "weekly_end_time": 1713542400000i64,
+                "weekly_start_time": 1712937600000i64,
+                "weekly_remains_time": 604800000i64
             }]
         });
         let quota = parse_response(&body).unwrap();
-        assert_eq!(quota.plan_name, "MiniMax-M2.7");
-        assert_eq!(quota.windows.len(), 1);
-        let w = &quota.windows[0];
-        assert_eq!(w.window_type, "5h");
-        assert_eq!(w.limit, 200);
-        assert_eq!(w.remaining, 187);
-        assert_eq!(w.used, 13);
-        assert!(w.reset_at.is_some());
+        assert!(quota.plan_name.contains("M2.7"));
+        // One 5h + one weekly window for the single model.
+        assert_eq!(quota.windows.len(), 2);
+        let five = &quota.windows[0];
+        assert!(five.window_type.starts_with("5h"));
+        assert_eq!(five.limit, 200);
+        assert_eq!(five.used, 187);
+        assert_eq!(five.remaining, 13);
+        assert!(five.reset_at.is_some());
+        let weekly = &quota.windows[1];
+        assert!(weekly.window_type.starts_with("wk"));
+        assert_eq!(weekly.limit, 1000);
+        assert_eq!(weekly.used, 850);
+        assert_eq!(weekly.remaining, 150);
+    }
+
+    #[test]
+    fn coding_plan_model_sorts_first() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [
+                {
+                    "model_name": "image-01",
+                    "start_time": 0, "end_time": 1,
+                    "remains_time": 0,
+                    "current_interval_total_count": 10,
+                    "current_interval_usage_count": 3,
+                    "current_weekly_total_count": 0,
+                    "current_weekly_usage_count": 0,
+                    "weekly_end_time": 0
+                },
+                {
+                    "model_name": "MiniMax-M2.7",
+                    "start_time": 0, "end_time": 1,
+                    "remains_time": 0,
+                    "current_interval_total_count": 100,
+                    "current_interval_usage_count": 50,
+                    "current_weekly_total_count": 0,
+                    "current_weekly_usage_count": 0,
+                    "weekly_end_time": 0
+                }
+            ]
+        });
+        let quota = parse_response(&body).unwrap();
+        assert!(quota.plan_name.contains("M2.7"));
+        // Coding-plan model's window first.
+        assert_eq!(quota.windows[0].limit, 100);
     }
 }

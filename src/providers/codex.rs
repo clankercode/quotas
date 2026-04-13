@@ -68,33 +68,19 @@ impl CodexProvider {
     }
 }
 
-pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
-    let plan_type = body
-        .get("plan_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    let credits_obj = body.get("credits").cloned().unwrap_or_default();
-    let unlimited = credits_obj
-        .get("unlimited")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let balance_str = credits_obj
-        .get("balance")
-        .and_then(|v| v.as_str())
-        .unwrap_or("0");
-
-    let rate_limit_obj = body.get("rate_limit").cloned().unwrap_or_default();
-    let primary = rate_limit_obj
+fn push_rate_limit_windows(
+    windows: &mut Vec<QuotaWindow>,
+    rate_limit: &serde_json::Value,
+    label_prefix: &str,
+) {
+    let primary = rate_limit
         .get("primary_window")
         .cloned()
         .unwrap_or_default();
-    let secondary = rate_limit_obj
+    let secondary = rate_limit
         .get("secondary_window")
         .cloned()
         .unwrap_or_default();
-
-    let mut windows = Vec::new();
 
     let primary_pct = primary
         .get("used_percent")
@@ -110,8 +96,14 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         .unwrap_or(18000);
 
     if primary_reset > 0 || primary_pct > 0 {
+        let base = format!("{}h", primary_window_sec / 3600);
+        let label = if label_prefix.is_empty() {
+            base
+        } else {
+            format!("{}/{}", label_prefix, base)
+        };
         windows.push(QuotaWindow {
-            window_type: format!("{}h", primary_window_sec / 3600),
+            window_type: label,
             used: primary_pct,
             limit: 100,
             remaining: 100 - primary_pct,
@@ -133,13 +125,77 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         .unwrap_or(604800);
 
     if secondary_reset > 0 || secondary_pct > 0 {
+        let base = format!("{}d", secondary_window_sec / 86400);
+        let label = if label_prefix.is_empty() {
+            base
+        } else {
+            format!("{}/{}", label_prefix, base)
+        };
         windows.push(QuotaWindow {
-            window_type: format!("{}d", secondary_window_sec / 86400),
+            window_type: label,
             used: secondary_pct,
             limit: 100,
             remaining: 100 - secondary_pct,
             reset_at: Utc.timestamp_opt(secondary_reset, 0).single(),
         });
+    }
+}
+
+fn short_codex_label(name: &str) -> String {
+    // Trim "GPT-5.3-" style prefixes and keep the distinguishing suffix
+    // short so it fits next to the duration label in a compact card.
+    let trimmed = name
+        .strip_prefix("GPT-5.3-")
+        .or_else(|| name.strip_prefix("gpt-5.3-"))
+        .unwrap_or(name);
+    let lower = trimmed.to_ascii_lowercase();
+    // Use the final dashed segment as the label — e.g. "Codex-Spark" → "spark".
+    lower
+        .rsplit('-')
+        .next()
+        .unwrap_or(&lower)
+        .chars()
+        .take(10)
+        .collect()
+}
+
+pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
+    let plan_type = body
+        .get("plan_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    let credits_obj = body.get("credits").cloned().unwrap_or_default();
+    let unlimited = credits_obj
+        .get("unlimited")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let balance_str = credits_obj
+        .get("balance")
+        .and_then(|v| v.as_str())
+        .unwrap_or("0");
+
+    let mut windows = Vec::new();
+
+    let rate_limit_obj = body.get("rate_limit").cloned().unwrap_or_default();
+    push_rate_limit_windows(&mut windows, &rate_limit_obj, "");
+
+    // Per-model sub-limits (e.g., GPT-5.3-Codex-Spark).
+    if let Some(extras) = body
+        .get("additional_rate_limits")
+        .and_then(|v| v.as_array())
+    {
+        for entry in extras {
+            let raw_label = entry
+                .get("limit_name")
+                .and_then(|v| v.as_str())
+                .or_else(|| entry.get("metered_feature").and_then(|v| v.as_str()))
+                .unwrap_or("extra");
+            let prefix = short_codex_label(raw_label);
+            if let Some(rl) = entry.get("rate_limit") {
+                push_rate_limit_windows(&mut windows, rl, &prefix);
+            }
+        }
     }
 
     let balance_value = balance_str.parse::<f64>().unwrap_or(0.0);

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
@@ -11,14 +11,6 @@ pub struct Config {
 #[serde(default)]
 pub struct AutoRefresh {
     pub enabled: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            auto_refresh: AutoRefresh::default(),
-        }
-    }
 }
 
 impl Default for AutoRefresh {
@@ -45,10 +37,7 @@ impl Config {
         let Ok(content) = std::fs::read_to_string(&path) else {
             return Self::default();
         };
-        match toml::from_str::<Config>(&content) {
-            Ok(c) => c,
-            Err(_) => Self::default(),
-        }
+        toml::from_str::<Config>(&content).unwrap_or_default()
     }
 }
 

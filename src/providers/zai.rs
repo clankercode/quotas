@@ -81,11 +81,13 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         #[serde(default)]
         number: i64,
         #[serde(default)]
-        usage: i64,
+        usage: Option<i64>,
         #[serde(rename = "currentValue", default)]
-        current_value: i64,
+        current_value: Option<i64>,
         #[serde(default)]
-        remaining: i64,
+        remaining: Option<i64>,
+        #[serde(default)]
+        percentage: Option<f64>,
         #[serde(rename = "nextResetTime", default)]
         next_reset_time: Option<i64>,
     }
@@ -109,26 +111,40 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
             let label = l.limit_type.as_str();
             let window_type = match raw {
                 "TOKENS_LIMIT" => {
-                    if label.contains("5h") || label.contains("5 Hour") || l.number <= 5 {
+                    // unit 3 = hour buckets → 5h; unit 6 = day buckets → weekly.
+                    if label.contains("5h") || label.contains("5 Hour") || l.unit == 3 {
                         "5h".to_string()
-                    } else if label.contains("Weekly") || label.contains("Week") || l.number >= 7 {
+                    } else if label.contains("Week") || l.unit == 6 {
                         "weekly".to_string()
                     } else {
-                        match l.unit {
-                            3 => "5h".to_string(),
-                            6 => "weekly".to_string(),
-                            _ => "tokens".to_string(),
-                        }
+                        "tokens".to_string()
                     }
                 }
                 "TIME_LIMIT" => "monthly_mcp".to_string(),
                 other => other.to_string(),
             };
+
+            // Z.ai returns two shapes:
+            //   (a) full: {usage: limit, currentValue: used, remaining: N}
+            //   (b) sparse: only {percentage: X} — seen for near-empty 5h windows
+            // Normalize both to used/limit/remaining.
+            let (used, limit, remaining) = match (l.usage, l.current_value, l.remaining) {
+                (Some(lim), Some(cur), Some(rem)) => (cur, lim, rem),
+                (Some(lim), Some(cur), None) => (cur, lim, (lim - cur).max(0)),
+                (Some(lim), None, Some(rem)) => ((lim - rem).max(0), lim, rem),
+                _ => {
+                    // Fall back to percentage → 0-100 scale.
+                    let pct = l.percentage.unwrap_or(0.0).clamp(0.0, 100.0);
+                    let used = pct.round() as i64;
+                    (used, 100, (100 - used).max(0))
+                }
+            };
+
             QuotaWindow {
                 window_type,
-                used: l.current_value,
-                limit: l.usage,
-                remaining: l.remaining,
+                used,
+                limit,
+                remaining,
                 reset_at: l
                     .next_reset_time
                     .and_then(|t| Utc.timestamp_millis_opt(t).single()),
