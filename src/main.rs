@@ -16,6 +16,7 @@ use quotas::tui::Direction;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(name = "quotas")]
@@ -138,6 +139,26 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
         .collect()
 }
 
+async fn fetch_one(kind: ProviderKind) -> ProviderResult {
+    let auth = build_auth_resolver(&kind);
+    let provider: Box<dyn Provider> = match kind {
+        ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
+        ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
+        ProviderKind::Minimax => Box::new(
+            quotas::providers::minimax::MinimaxProvider::with_multi_resolver(MultiResolver::new(
+                vec![auth],
+            )),
+        ),
+        ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
+        ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
+    };
+    match provider.fetch().await {
+        Ok(r) => r,
+        Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
+        Err(e) => network_error_result(kind, e.to_string()),
+    }
+}
+
 fn fetch_provider_sync(kind: ProviderKind) -> ProviderResult {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -146,25 +167,7 @@ fn fetch_provider_sync(kind: ProviderKind) -> ProviderResult {
         Ok(rt) => rt,
         Err(e) => return network_error_result(kind, e.to_string()),
     };
-    rt.block_on(async {
-        let auth = build_auth_resolver(&kind);
-        let provider: Box<dyn Provider> = match kind {
-            ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
-            ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
-            ProviderKind::Minimax => Box::new(
-                quotas::providers::minimax::MinimaxProvider::with_multi_resolver(
-                    MultiResolver::new(vec![auth]),
-                ),
-            ),
-            ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
-            ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
-        };
-        match provider.fetch().await {
-            Ok(r) => r,
-            Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
-            Err(e) => network_error_result(kind, e.to_string()),
-        }
-    })
+    rt.block_on(fetch_one(kind))
 }
 
 fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
@@ -189,9 +192,28 @@ fn fetch_all(kinds: Vec<ProviderKind>) -> Vec<ProviderResult> {
     kinds.into_iter().map(fetch_provider_sync).collect()
 }
 
+fn spawn_fetches(
+    rt: &tokio::runtime::Runtime,
+    kinds: &[ProviderKind],
+    tx: tokio::sync::mpsc::UnboundedSender<(usize, ProviderResult)>,
+) {
+    for (idx, kind) in kinds.iter().cloned().enumerate() {
+        let tx = tx.clone();
+        rt.spawn(async move {
+            let result = fetch_one(kind).await;
+            let _ = tx.send((idx, result));
+        });
+    }
+}
+
 fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
-    let initial_results = fetch_all(kinds.clone());
-    let mut dashboard = Dashboard::new(initial_results);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(2)
+        .build()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut dashboard = Dashboard::new_loading(kinds.clone());
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -199,49 +221,57 @@ fn run_tui(kinds: Vec<ProviderKind>) -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    loop {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
+    spawn_fetches(&rt, &kinds, tx);
+
+    let tick = Duration::from_millis(80);
+    let result: io::Result<()> = (|| loop {
         terminal.draw(|f| dashboard.render(f))?;
 
-        if let Event::Key(KeyEvent { code, .. }) = crossterm::event::read()? {
-            match code {
-                KeyCode::Char('q') | KeyCode::Char('Q') => break,
-                KeyCode::Char('r') | KeyCode::Char('R') => {
-                    let fetched = fetch_all(kinds.clone());
-                    dashboard = Dashboard::new(fetched);
-                }
-                KeyCode::Char('c') | KeyCode::Char('C') => {
-                    if let Some(selected) = dashboard.selected_provider() {
-                        if let Ok(json) = serde_json::to_string_pretty(selected) {
-                            if let Ok(mut ctx) = arboard::Clipboard::new() {
-                                let _ = ctx.set_text(&json);
+        while let Ok((idx, result)) = rx.try_recv() {
+            dashboard.update(idx, result);
+        }
+
+        if crossterm::event::poll(tick)? {
+            if let Event::Key(KeyEvent { code, .. }) = crossterm::event::read()? {
+                match code {
+                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        dashboard.reset_loading();
+                        let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
+                        rx = new_rx;
+                        spawn_fetches(&rt, &kinds, new_tx);
+                    }
+                    KeyCode::Char('c') | KeyCode::Char('C') => {
+                        if let Some(selected) = dashboard.selected_provider() {
+                            if let Ok(json) = serde_json::to_string_pretty(selected) {
+                                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                    let _ = ctx.set_text(&json);
+                                }
                             }
                         }
                     }
+                    KeyCode::Enter => {
+                        dashboard.show_detail = !dashboard.show_detail;
+                    }
+                    KeyCode::Left => dashboard.navigate(Direction::Left),
+                    KeyCode::Right => dashboard.navigate(Direction::Right),
+                    KeyCode::Up => dashboard.navigate(Direction::Up),
+                    KeyCode::Down => dashboard.navigate(Direction::Down),
+                    KeyCode::PageUp => dashboard.page_up(),
+                    KeyCode::PageDown => dashboard.page_down(),
+                    _ => {}
                 }
-                KeyCode::Enter => {
-                    dashboard.show_detail = !dashboard.show_detail;
-                }
-                KeyCode::Left => {
-                    dashboard.navigate(Direction::Left);
-                }
-                KeyCode::Right => {
-                    dashboard.navigate(Direction::Right);
-                }
-                KeyCode::Up => {
-                    dashboard.navigate(Direction::Up);
-                }
-                KeyCode::Down => {
-                    dashboard.navigate(Direction::Down);
-                }
-                _ => {}
             }
+        } else if !dashboard.all_loaded() {
+            dashboard.tick_spinner();
         }
-    }
+    })();
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    Ok(())
+    result
 }
 
 fn main() {
