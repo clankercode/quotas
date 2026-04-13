@@ -361,8 +361,20 @@ impl Dashboard {
         let max_rows = (grid_area.height / MIN_CARD_H).max(1) as usize;
         let per_page = (max_cols * max_rows).max(1);
 
+        // Helper: actual rows needed with the flow layout (MiniMax spans 2).
+        let flow_rows = |cols: usize| -> usize {
+            if self.stable_order.is_empty() || cols == 0 {
+                return 1;
+            }
+            Self::flow_placements(&self.entries, &self.stable_order, cols)
+                .iter()
+                .map(|(r, _, _)| r + 1)
+                .max()
+                .unwrap_or(1)
+        };
+
         if n <= per_page {
-            // Choose cols balancing terminal aspect
+            // Choose cols balancing terminal aspect.
             // Aim for roughly square cells visually: chars are ~2:1 tall:wide,
             // so pick cols so that cols/rows ≈ grid_w / (grid_h * 2).
             let aspect = (grid_area.width as f64) / (grid_area.height as f64 * 2.0).max(1.0);
@@ -380,7 +392,23 @@ impl Dashboard {
                     best_cols = c;
                 }
             }
-            let cols = best_cols;
+
+            // Verify actual row count via flow layout (simple div_ceil can
+            // undercount when MiniMax forces a row wrap mid-row).
+            let actual_rows = flow_rows(best_cols);
+            let cols = if actual_rows <= max_rows {
+                best_cols
+            } else {
+                // Try wider layouts; a higher col count may let MiniMax fit
+                // alongside its neighbour instead of wrapping to its own row.
+                let wider = (best_cols..=max_cols)
+                    .find(|&c| flow_rows(c) <= max_rows);
+                match wider {
+                    Some(c) => c,
+                    // Nothing fits on one page — fall through to pagination.
+                    None => return GridLayout { cols: max_cols, per_page },
+                }
+            };
             GridLayout { cols, per_page: n }
         } else {
             // Paginate: use max_cols × max_rows
