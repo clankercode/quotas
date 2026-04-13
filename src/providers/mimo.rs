@@ -18,6 +18,7 @@ use serde::Deserialize;
 const PAYG_BASE: &str = "https://api.xiaomimimo.com/v1";
 const TOKEN_PLAN_BASE: &str = "https://token-plan-sgp.xiaomimimo.com/v1";
 const PLATFORM_USAGE: &str = "https://platform.xiaomimimo.com/api/v1/tokenPlan/usage";
+const TOKEN_PLAN_SGP_USAGE: &str = "https://token-plan-sgp.xiaomimimo.com/v1/tokenPlan/usage";
 const DASHBOARD_URL: &str = "https://platform.xiaomimimo.com";
 
 pub struct MimoProvider {
@@ -147,8 +148,57 @@ impl MimoProvider {
         }
     }
 
-    /// Fetch via bearer API key (PAYG or Token Plan SGP endpoints).
+    /// Fetch via bearer API key.
+    ///
+    /// Tries (in order):
+    ///   1. tokenPlan/usage on token-plan-sgp (monthUsage format)
+    ///   2. tokenPlan/usage on platform.xiaomimimo.com (monthUsage format)
+    ///   3. /user/balance on token-plan-sgp (legacy balance format)
+    ///   4. /user/balance on api.xiaomimimo.com (PAYG balance format)
     async fn fetch_bearer(&self, key: &str) -> Result<ProviderResult> {
+        // 1. Try tokenPlan/usage endpoints with bearer auth.
+        for url in &[TOKEN_PLAN_SGP_USAGE, PLATFORM_USAGE] {
+            if let Some((status, body)) = self.try_json_bearer(key, url).await? {
+                if status == 401 || status == 403 {
+                    // Auth error — return immediately.
+                    let msg = body
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Authentication failed");
+                    return Ok(ProviderResult {
+                        kind: ProviderKind::Mimo,
+                        status: ProviderStatus::Unavailable {
+                            info: crate::providers::UnavailableInfo {
+                                reason: msg.to_string(),
+                                console_url: Some(DASHBOARD_URL.into()),
+                            },
+                        },
+                        fetched_at: Utc::now(),
+                        raw_response: Some(body),
+                        auth_source: None,
+                    });
+                }
+                if status < 400 {
+                    // Check code != 0 for platform-style errors.
+                    if let Some(code) = body.get("code").and_then(|v| v.as_i64()) {
+                        if code != 0 {
+                            continue; // Not a valid response, try next.
+                        }
+                    }
+                    if let Ok(quota) = parse_platform_usage(&body) {
+                        return Ok(ProviderResult {
+                            kind: ProviderKind::Mimo,
+                            status: ProviderStatus::Available { quota },
+                            fetched_at: Utc::now(),
+                            raw_response: Some(body),
+                            auth_source: None,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 2. Fall back to /user/balance endpoints.
         for base in &[TOKEN_PLAN_BASE, PAYG_BASE] {
             if let Some((status, body)) = self
                 .try_json_bearer(key, &format!("{base}/user/balance"))
@@ -187,7 +237,7 @@ impl MimoProvider {
             }
         }
 
-        // No balance endpoint found on either URL. Verify auth is valid.
+        // 3. No endpoint worked. Check if key is at least valid.
         match self.detect_base_url(key).await? {
             Some(_base) => Ok(ProviderResult {
                 kind: ProviderKind::Mimo,
@@ -484,5 +534,153 @@ mod tests {
         assert_eq!(quota.windows[0].used, 265741632);
         assert_eq!(quota.windows[0].limit, 1600000000);
         assert_eq!(quota.windows[0].remaining, 1600000000 - 265741632);
+    }
+
+    /// Probe all MiMo endpoints with a bearer API key.
+    /// Run with: MIMO_API_KEY=sk-xxx cargo test mimo_bearer_probe -- --ignored
+    ///
+    /// Tries each URL and prints status + first 200 chars of body.
+    #[tokio::test]
+    #[ignore]
+    async fn mimo_bearer_probe() {
+        let key = std::env::var("MIMO_API_KEY")
+            .expect("set MIMO_API_KEY to a MiMo API key for this test");
+        let http = Client::new();
+
+        let urls = [
+            ("tokenPlan/usage (sgp)", TOKEN_PLAN_SGP_USAGE),
+            ("tokenPlan/usage (platform)", PLATFORM_USAGE),
+            ("balance (sgp)", &format!("{TOKEN_PLAN_BASE}/user/balance")),
+            ("balance (payg)", &format!("{PAYG_BASE}/user/balance")),
+            ("models (sgp)", &format!("{TOKEN_PLAN_BASE}/models")),
+            ("models (payg)", &format!("{PAYG_BASE}/models")),
+        ];
+
+        for (label, url) in &urls {
+            let resp = http
+                .get(*url)
+                .header("Authorization", format!("Bearer {key}"))
+                .send()
+                .await
+                .expect("request failed");
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            let preview: String = text.chars().take(300).collect();
+            println!("--- {label} [{status}] ---\n{preview}\n");
+        }
+    }
+
+    /// Probe MiMo endpoints with cookie auth.
+    /// Run with: MIMO_COOKIE=base64token cargo test mimo_cookie_probe -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mimo_cookie_probe() {
+        let cookie = std::env::var("MIMO_COOKIE")
+            .expect("set MIMO_COOKIE to the api-platform_serviceToken value");
+        let http = Client::new();
+
+        let urls = [
+            ("tokenPlan/usage (platform)", PLATFORM_USAGE),
+            ("tokenPlan/usage (sgp)", TOKEN_PLAN_SGP_USAGE),
+        ];
+
+        for (label, url) in &urls {
+            let resp = http
+                .get(*url)
+                .header("Cookie", format!("api-platform_serviceToken=\"{cookie}\""))
+                .header("accept", "application/json")
+                .header("accept-language", "en")
+                .send()
+                .await
+                .expect("request failed");
+            let status = resp.status().as_u16();
+            let text = resp.text().await.unwrap_or_default();
+            let preview: String = text.chars().take(300).collect();
+            println!("--- {label} [{status}] ---\n{preview}\n");
+        }
+    }
+
+    /// Full provider fetch with bearer API key.
+    /// Run with: MIMO_API_KEY=sk-xxx cargo test mimo_full_fetch_bearer -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mimo_full_fetch_bearer() {
+        let key = std::env::var("MIMO_API_KEY")
+            .expect("set MIMO_API_KEY for this test");
+        use crate::auth::{AuthCredential, ResolvedAuth};
+        use crate::providers::Provider;
+
+        struct StubAuth(String);
+        #[async_trait]
+        impl AuthResolver for StubAuth {
+            async fn resolve(&self) -> crate::Result<ResolvedAuth> {
+                Ok(ResolvedAuth {
+                    credential: AuthCredential::Bearer(self.0.clone()),
+                    source: "test".into(),
+                })
+            }
+        }
+
+        let provider = MimoProvider::new(Box::new(StubAuth(key)));
+        let result = provider.fetch().await.expect("fetch failed");
+        println!("status: {:?}", result.status);
+        if let Some(raw) = &result.raw_response {
+            println!("raw: {}", serde_json::to_string_pretty(raw).unwrap());
+        }
+
+        match &result.status {
+            ProviderStatus::Available { quota } => {
+                println!("plan: {}", quota.plan_name);
+                for w in &quota.windows {
+                    println!(
+                        "  {}: {}/{} remaining={} reset={:?}",
+                        w.window_type, w.used, w.limit, w.remaining, w.reset_at
+                    );
+                }
+            }
+            other => println!("non-available status: {other:?}"),
+        }
+    }
+
+    /// Full provider fetch with cookie auth.
+    /// Run with: MIMO_COOKIE=base64token cargo test mimo_full_fetch_cookie -- --ignored
+    #[tokio::test]
+    #[ignore]
+    async fn mimo_full_fetch_cookie() {
+        let cookie = std::env::var("MIMO_COOKIE")
+            .expect("set MIMO_COOKIE for this test");
+        use crate::auth::{AuthCredential, ResolvedAuth};
+        use crate::providers::Provider;
+
+        struct StubAuth(String);
+        #[async_trait]
+        impl AuthResolver for StubAuth {
+            async fn resolve(&self) -> crate::Result<ResolvedAuth> {
+                Ok(ResolvedAuth {
+                    credential: AuthCredential::Cookie(self.0.clone()),
+                    source: "test".into(),
+                })
+            }
+        }
+
+        let provider = MimoProvider::new(Box::new(StubAuth(cookie)));
+        let result = provider.fetch().await.expect("fetch failed");
+        println!("status: {:?}", result.status);
+        if let Some(raw) = &result.raw_response {
+            println!("raw: {}", serde_json::to_string_pretty(raw).unwrap());
+        }
+
+        match &result.status {
+            ProviderStatus::Available { quota } => {
+                println!("plan: {}", quota.plan_name);
+                for w in &quota.windows {
+                    println!(
+                        "  {}: {}/{} remaining={} reset={:?}",
+                        w.window_type, w.used, w.limit, w.remaining, w.reset_at
+                    );
+                }
+            }
+            other => println!("non-available status: {other:?}"),
+        }
     }
 }
