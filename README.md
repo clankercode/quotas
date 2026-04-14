@@ -1,10 +1,12 @@
 # quotas
 
 A Rust CLI that auto-detects your AI provider credentials and shows usage
-quotas for each provider in a single place — either as an interactive TUI or
-as filterable JSON.
+quotas for each provider in a single place — either as an interactive TUI,
+a compact statusline for shell prompts, or filterable JSON.
 
-Supports five providers today:
+![TUI screenshot](screenshot.png)
+
+## Providers
 
 | Provider | Auth discovery | Endpoint |
 |----------|----------------|----------|
@@ -13,6 +15,9 @@ Supports five providers today:
 | **MiniMax** Token Plan | `MINIMAX_API_KEY` → `~/.minimax` | `GET /v1/api/openplatform/coding_plan/remains` on `api.minimax.io` |
 | **Kimi** (Coding Plan + PAYG) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `GET /coding/v1/usages` and `/v1/users/me/balance` |
 | **Z.ai / GLM** Coding Plan | `ZHIPU_API_KEY` / `ZAI_API_KEY` → `~/.api-zai` | `GET /api/monitor/usage/quota/limit` on `api.z.ai` |
+| **DeepSeek** | `DEEPSEEK_API_KEY` → `~/.deepseek` | `GET /user/balance` on `api.deepseek.com` |
+| **SiliconFlow** | `SILICONFLOW_API_KEY` → `~/.siliconflow` | `GET /v1/user/info` on `api.siliconflow.cn` |
+| **OpenRouter** | `OPENROUTER_API_KEY` → `~/.openrouter` | `GET /api/v1/credits` on `openrouter.ai` |
 
 ## Install
 
@@ -22,22 +27,49 @@ cargo install quotas
 
 ## Usage
 
+### Interactive TUI (default)
+
 ```bash
-# Interactive TUI (default)
 quotas
-
-# Headless JSON for all providers
-quotas --json
-
-# Pretty-printed JSON
-quotas --json --pretty
-
-# Filter by provider
-quotas --json --provider=claude,codex
 ```
 
-TUI keybinds: `←↑↓→` navigate, `Enter` drill into a card, `R` refresh,
+Keybinds: `←↑↓→` navigate, `Enter` drill into a card, `R` refresh,
 `C` copy selected provider's JSON to clipboard, `Q` quit.
+
+### JSON output
+
+```bash
+quotas --json                          # all providers
+quotas --json --pretty                 # pretty-printed
+quotas --json --provider=claude,codex  # filter by provider
+```
+
+### Statusline (shell prompt)
+
+```bash
+quotas --statusline                    #   claude 80/100 |   codex 60/100 | ...
+quotas --statusline --no-icons         # claude 80/100 | codex 60/100 | ...
+quotas --statusline --provider=claude  #   claude 80/100
+quotas --statusline --format='%provider: %remaining/%limit (%window)'
+```
+
+Statusline reads from a local cache (`$XDG_CACHE_HOME/quotas/cache.json`),
+so it's instant with no network call. If the cache is older than 30 minutes,
+it forks a background refresh automatically.
+
+Shell integration examples:
+
+```bash
+# bash PS1
+PS1='$(quotas --statusline)\n\$ '
+
+# starship custom module
+[custom.quotas]
+command = "quotas --statusline"
+
+# fish right prompt
+function fish_right_prompt; quotas --statusline; end
+```
 
 ## Output
 
