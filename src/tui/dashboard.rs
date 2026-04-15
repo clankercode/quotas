@@ -84,6 +84,31 @@ impl Dashboard {
         }
     }
 
+    /// Create a dashboard with pre-populated entries (mix of Done, Loading, Refreshing).
+    /// If all entries are already Done, the visual order is frozen immediately.
+    pub fn new_with_entries(kinds: Vec<ProviderKind>, entries: Vec<ProviderEntry>) -> Self {
+        let n = kinds.len();
+        let all_done = entries.iter().all(|e| matches!(e, ProviderEntry::Done(_)));
+        let mut dashboard = Self {
+            kinds,
+            entries,
+            selected_index: 0,
+            show_detail: false,
+            detail_scroll: 0,
+            spinner_frame: 0,
+            last_layout: Cell::new(GridLayout::default()),
+            stable_order: (0..n).collect(),
+            mouse_pos: Cell::new(None),
+            card_hit_areas: RefCell::new(Vec::new()),
+            refresh_btn: Cell::new(None),
+            quit_btn: Cell::new(None),
+        };
+        if all_done {
+            dashboard.stable_order = dashboard.compute_visual_order();
+        }
+        dashboard
+    }
+
     /// Update the last-known mouse position (used for button hover styling).
     pub fn set_mouse_pos(&self, col: u16, row: u16) {
         self.mouse_pos.set(Some((col, row)));
@@ -556,9 +581,7 @@ impl Dashboard {
         self.quit_btn.set(Some(quit_rect));
 
         let in_rect = |r: Rect| -> bool {
-            mouse.is_some_and(|(c, row)| {
-                c >= r.x && c < r.x + r.width && row == r.y
-            })
+            mouse.is_some_and(|(c, row)| c >= r.x && c < r.x + r.width && row == r.y)
         };
         let btn_style = |r: Rect| -> Style {
             if in_rect(r) {
@@ -1331,6 +1354,35 @@ fn format_num(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{ProviderKind, ProviderQuota, ProviderStatus};
+
+    fn dummy_available_result(kind: ProviderKind) -> ProviderResult {
+        ProviderResult {
+            kind,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "test".into(),
+                    windows: vec![],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        }
+    }
+
+    fn dummy_auth_required_result(kind: ProviderKind) -> ProviderResult {
+        ProviderResult {
+            kind,
+            status: ProviderStatus::AuthRequired,
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        }
+    }
 
     #[test]
     fn format_num_scales() {
@@ -1339,5 +1391,65 @@ mod tests {
         assert_eq!(format_num(2_000), "2k");
         assert_eq!(format_num(150_000), "150k");
         assert_eq!(format_num(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn new_with_entries_all_done_freezes_order() {
+        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex];
+        let entries = vec![
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Codex)),
+        ];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        assert!(dashboard.all_loaded());
+        // Stable order should be frozen (not identity for auth-required filtering).
+        assert_eq!(dashboard.stable_order, vec![0, 1]);
+    }
+
+    #[test]
+    fn new_with_entries_mixed_loading_not_frozen() {
+        let kinds = vec![
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::DeepSeek,
+        ];
+        let entries = vec![
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
+            ProviderEntry::Loading,
+            ProviderEntry::Done(dummy_available_result(ProviderKind::DeepSeek)),
+        ];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        assert!(!dashboard.all_loaded());
+        // Stable order should be identity (not frozen yet).
+        assert_eq!(dashboard.stable_order, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn new_with_entries_auth_required_hidden_from_order() {
+        let kinds = vec![
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::DeepSeek,
+        ];
+        let entries = vec![
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
+            ProviderEntry::Done(dummy_auth_required_result(ProviderKind::Codex)),
+            ProviderEntry::Done(dummy_available_result(ProviderKind::DeepSeek)),
+        ];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        assert!(dashboard.all_loaded());
+        // Codex (index 1) is AuthRequired, should be excluded from visual order.
+        assert_eq!(dashboard.stable_order, vec![0, 2]);
+    }
+
+    #[test]
+    fn new_with_entries_refreshing_counts_as_loaded_for_spinner() {
+        let kinds = vec![ProviderKind::Claude];
+        let entries = vec![ProviderEntry::Refreshing(dummy_available_result(
+            ProviderKind::Claude,
+        ))];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        // Refreshing is NOT Done, so all_loaded() should be false (spinner shows).
+        assert!(!dashboard.all_loaded());
     }
 }

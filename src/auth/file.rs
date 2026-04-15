@@ -43,6 +43,10 @@ impl AuthResolver for FileResolver {
             self.source_name
         )))
     }
+
+    fn have_credentials(&self) -> bool {
+        self.file_paths.iter().any(|p| p.exists())
+    }
 }
 
 /// Reads a raw cookie value from a file (first non-empty, non-comment line).
@@ -78,5 +82,68 @@ impl AuthResolver for CookieFileResolver {
             "no cookie credentials in files for {}",
             self.source_name
         )))
+    }
+
+    fn have_credentials(&self) -> bool {
+        self.file_paths.iter().any(|p| p.exists())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("quotas_test_{}", name))
+    }
+
+    #[test]
+    fn file_resolver_have_credentials_true_when_file_exists() {
+        let path = temp_path("file_resolver_have.txt");
+        fs::write(&path, "sk-test-key").unwrap();
+        let resolver = FileResolver::new(vec![path.clone()], |c| Some(c.to_string()), "test");
+        assert!(resolver.have_credentials());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_resolver_have_credentials_false_when_no_files() {
+        let path = temp_path("file_resolver_no_such_file.txt");
+        let _ = fs::remove_file(&path);
+        let resolver = FileResolver::new(vec![path], |c| Some(c.to_string()), "test");
+        assert!(!resolver.have_credentials());
+    }
+
+    #[test]
+    fn file_resolver_have_credentials_checks_any_of_multiple() {
+        let missing = temp_path("file_resolver_missing.txt");
+        let present = temp_path("file_resolver_present.txt");
+        let _ = fs::remove_file(&missing);
+        fs::write(&present, "sk-key").unwrap();
+        let resolver = FileResolver::new(
+            vec![missing, present.clone()],
+            |c| Some(c.to_string()),
+            "test",
+        );
+        assert!(resolver.have_credentials());
+        let _ = fs::remove_file(&present);
+    }
+
+    #[test]
+    fn cookie_file_resolver_have_credentials_true_when_file_exists() {
+        let path = temp_path("cookie_resolver_have.txt");
+        fs::write(&path, "cookie-value").unwrap();
+        let resolver = CookieFileResolver::new(vec![path.clone()], "test");
+        assert!(resolver.have_credentials());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn cookie_file_resolver_have_credentials_false_when_no_files() {
+        let path = temp_path("cookie_resolver_no_such_file.txt");
+        let _ = fs::remove_file(&path);
+        let resolver = CookieFileResolver::new(vec![path], "test");
+        assert!(!resolver.have_credentials());
     }
 }

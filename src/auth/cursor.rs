@@ -20,6 +20,12 @@ impl CursorAuthResolver {
     }
 }
 
+impl Default for CursorAuthResolver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Deserialize)]
 #[allow(non_snake_case)]
 struct AuthJson {
@@ -68,5 +74,9 @@ impl AuthResolver for CursorAuthResolver {
             credential: AuthCredential::Cookie(session_token),
             source: format!("file:{} + file:{}", self.auth_json_path.display(), self.cli_config_path.display()),
         })
+    }
+
+    fn have_credentials(&self) -> bool {
+        self.auth_json_path.exists() && self.cli_config_path.exists()
     }
 }

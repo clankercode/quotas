@@ -29,4 +29,52 @@ impl AuthResolver for EnvResolver {
         }
         Err(Error::Auth("env vars not found".into()))
     }
+
+    fn have_credentials(&self) -> bool {
+        self.env_vars
+            .iter()
+            .any(|(name, _)| env::var(name).is_ok_and(|v| !v.is_empty()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn have_credentials_true_when_env_set() {
+        let var_name = "TEST_QUOTAS_ENV_RESOLVER_HAVE_CRED";
+        env::set_var(var_name, "sk-test-123");
+        let resolver = EnvResolver::new(vec![(var_name, "test")]);
+        assert!(resolver.have_credentials());
+        env::remove_var(var_name);
+    }
+
+    #[test]
+    fn have_credentials_false_when_env_unset() {
+        let var_name = "TEST_QUOTAS_ENV_RESOLVER_NOPE_XYZ";
+        env::remove_var(var_name); // ensure it doesn't exist
+        let resolver = EnvResolver::new(vec![(var_name, "test")]);
+        assert!(!resolver.have_credentials());
+    }
+
+    #[test]
+    fn have_credentials_false_when_env_empty() {
+        let var_name = "TEST_QUOTAS_ENV_RESOLVER_EMPTY";
+        env::set_var(var_name, "");
+        let resolver = EnvResolver::new(vec![(var_name, "test")]);
+        assert!(!resolver.have_credentials());
+        env::remove_var(var_name);
+    }
+
+    #[test]
+    fn have_credentials_checks_any_of_multiple() {
+        let var1 = "TEST_QUOTAS_ENV_RESOLVER_MULTI1";
+        let var2 = "TEST_QUOTAS_ENV_RESOLVER_MULTI2";
+        env::remove_var(var1);
+        env::set_var(var2, "sk-present");
+        let resolver = EnvResolver::new(vec![(var1, "first"), (var2, "second")]);
+        assert!(resolver.have_credentials());
+        env::remove_var(var2);
+    }
 }

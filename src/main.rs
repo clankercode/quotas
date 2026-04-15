@@ -21,6 +21,7 @@ use quotas::providers::{Provider, ProviderKind, ProviderResult};
 use quotas::tui::Dashboard;
 use quotas::tui::Direction;
 use quotas::tui::HitResult;
+use quotas::tui::ProviderEntry;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -182,6 +183,7 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
         }
         ProviderKind::Gemini => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(OAuthFileResolver::gemini()),
                 Box::new(EnvResolver::new(vec![("GEMINI_API_KEY", "gemini")])),
                 Box::new(FileResolver::new(
                     vec![dirs::home_dir().unwrap_or_default().join(".gemini-api-key")],
@@ -434,13 +436,16 @@ fn fetch_with_staleness_check(
     results
 }
 
-fn spawn_fetches(
+/// Spawn fetches only for the specified provider indices.
+fn spawn_fetches_for(
     rt: &tokio::runtime::Runtime,
     kinds: &[ProviderKind],
+    indices: &[usize],
     config: Config,
     tx: tokio::sync::mpsc::UnboundedSender<(usize, ProviderResult)>,
 ) {
-    for (idx, kind) in kinds.iter().cloned().enumerate() {
+    for &idx in indices {
+        let kind = kinds[idx];
         let tx = tx.clone();
         let config = config.clone();
         rt.spawn(async move {
@@ -457,7 +462,78 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         .build()
         .map_err(io::Error::other)?;
 
-    let mut dashboard = Dashboard::new_loading(kinds.clone());
+    // Read cache and build auth resolvers for credential pre-checking.
+    let disk_cache = cache::read_cache();
+    let now = chrono::Utc::now();
+    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
+        .iter()
+        .map(|k| build_auth_resolver(k))
+        .collect();
+
+    // Build initial entries: prefer cached data when fresh, skip fetches for
+    // providers without credentials, only spawn fetches where needed.
+    let mut initial_entries = Vec::with_capacity(kinds.len());
+    let mut fetch_indices: Vec<usize> = Vec::new();
+
+    for (idx, kind) in kinds.iter().enumerate() {
+        let key = kind.slug().to_string();
+        let has_creds = auth_resolvers[idx].have_credentials();
+
+        if cached {
+            // --cached: only show cache, never fetch.
+            if let Some(entry) = disk_cache.entries.get(&key) {
+                let mut result = entry.result.clone();
+                result.cached_at = Some(entry.cached_at);
+                initial_entries.push(ProviderEntry::Done(result));
+            } else if has_creds {
+                initial_entries.push(ProviderEntry::Done(ProviderResult {
+                    kind: *kind,
+                    status: quotas::providers::ProviderStatus::AuthRequired,
+                    fetched_at: now,
+                    raw_response: None,
+                    auth_source: None,
+                    cached_at: None,
+                }));
+            } else {
+                initial_entries.push(ProviderEntry::Done(auth_required_result(
+                    *kind,
+                    "no credentials".into(),
+                )));
+            }
+            continue;
+        }
+
+        if let Some(entry) = disk_cache.entries.get(&key) {
+            let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
+            let threshold = config.staleness.staleness_threshold(&key);
+            if age_secs < threshold {
+                // Fresh cache — show immediately, no fetch needed.
+                let mut result = entry.result.clone();
+                result.cached_at = Some(entry.cached_at);
+                initial_entries.push(ProviderEntry::Done(result));
+                continue;
+            }
+            // Stale cache — show old data while refreshing in background.
+            let mut result = entry.result.clone();
+            result.cached_at = Some(entry.cached_at);
+            initial_entries.push(ProviderEntry::Refreshing(result));
+            if has_creds {
+                fetch_indices.push(idx);
+            }
+        } else if has_creds {
+            // No cache but credentials exist — show loading spinner.
+            initial_entries.push(ProviderEntry::Loading);
+            fetch_indices.push(idx);
+        } else {
+            // No cache, no credentials — show auth required.
+            initial_entries.push(ProviderEntry::Done(auth_required_result(
+                *kind,
+                "no credentials".into(),
+            )));
+        }
+    }
+
+    let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -466,9 +542,31 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     let mut terminal = Terminal::new(backend)?;
 
     let (mut cur_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
-    spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
-    // Per-provider last-refresh timestamps so each provider has its own cooldown.
-    let mut last_refresh: Vec<Instant> = kinds.iter().map(|_| Instant::now()).collect();
+    if !fetch_indices.is_empty() {
+        spawn_fetches_for(&rt, &kinds, &fetch_indices, config.clone(), cur_tx.clone());
+    }
+
+    // Per-provider last-refresh timestamps.  For entries we're about to fetch
+    // the timer starts now; for cached entries we back-date the timer so the
+    // auto-refresh interval fires at roughly the right time.
+    let mut last_refresh: Vec<Instant> = kinds
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| {
+            if fetch_indices.contains(&idx) {
+                Instant::now()
+            } else if let Some(entry) =
+                disk_cache.entries.get(kinds[idx].slug())
+            {
+                let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
+                let elapsed = Duration::from_secs(age_secs);
+                // Back-date so the next auto-refresh fires after the normal interval.
+                Instant::now().checked_sub(elapsed).unwrap_or(Instant::now())
+            } else {
+                Instant::now()
+            }
+        })
+        .collect();
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
@@ -477,12 +575,17 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         while let Ok((idx, result)) = rx.try_recv() {
             cache::write_cache(std::slice::from_ref(&result));
             dashboard.update(idx, result);
+            last_refresh[idx] = Instant::now();
         }
 
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
+        // Skip providers without credentials.
         if !cached {
             for (idx, kind) in kinds.iter().cloned().enumerate() {
+                if !auth_resolvers[idx].have_credentials() {
+                    continue;
+                }
                 if dashboard.is_entry_done(idx)
                     && last_refresh[idx].elapsed() >= auto_refresh_interval(kind)
                 {
@@ -522,7 +625,17 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                                 rx = new_rx;
                                 cur_tx = new_tx;
-                                spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+                                // Only fetch providers that have credentials.
+                                let fetchable: Vec<usize> = (0..kinds.len())
+                                    .filter(|&i| auth_resolvers[i].have_credentials())
+                                    .collect();
+                                spawn_fetches_for(
+                                    &rt,
+                                    &kinds,
+                                    &fetchable,
+                                    config.clone(),
+                                    cur_tx.clone(),
+                                );
                                 for t in last_refresh.iter_mut() {
                                     *t = Instant::now();
                                 }
@@ -560,7 +673,17 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                         rx = new_rx;
                         cur_tx = new_tx;
-                        spawn_fetches(&rt, &kinds, config.clone(), cur_tx.clone());
+                        // Only fetch providers that have credentials.
+                        let fetchable: Vec<usize> = (0..kinds.len())
+                            .filter(|&i| auth_resolvers[i].have_credentials())
+                            .collect();
+                        spawn_fetches_for(
+                            &rt,
+                            &kinds,
+                            &fetchable,
+                            config.clone(),
+                            cur_tx.clone(),
+                        );
                         for t in last_refresh.iter_mut() {
                             *t = Instant::now();
                         }

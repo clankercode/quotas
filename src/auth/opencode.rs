@@ -98,6 +98,18 @@ impl AuthResolver for OpencodeAuthResolver {
             self.slot.key()
         )))
     }
+
+    fn have_credentials(&self) -> bool {
+        self.file_paths.iter().any(|p| {
+            if !p.exists() {
+                return false;
+            }
+            std::fs::read_to_string(p)
+                .ok()
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                .is_some_and(|v| v.get(self.slot.key()).is_some())
+        })
+    }
 }
 
 /// Kimi CLI stores an OAuth access token at ~/.kimi/credentials/kimi-code.json.
@@ -141,6 +153,10 @@ impl AuthResolver for KimiCliResolver {
             credential: AuthCredential::Bearer(parsed.access_token),
             source: format!("kimi-cli:{}", self.file_path.display()),
         })
+    }
+
+    fn have_credentials(&self) -> bool {
+        self.file_path.exists()
     }
 }
 

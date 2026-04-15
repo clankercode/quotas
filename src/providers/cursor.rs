@@ -108,6 +108,7 @@ impl CursorProvider {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PlanInfoResponse {
     #[serde(default, rename = "planInfo")]
     plan_info: Option<PlanInfo>,
@@ -116,6 +117,7 @@ struct PlanInfoResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct PlanInfo {
     #[serde(default, rename = "planName")]
     plan_name: Option<String>,
@@ -190,7 +192,7 @@ fn parse_quota(plan_body: &serde_json::Value, usage_body: &serde_json::Value) ->
         let reset_at = usage.billing_cycle_end.and_then(|ts| {
             ts.parse::<i64>().ok().map(|ms| {
                 DateTime::from_timestamp(ms / 1000, 0)
-                    .unwrap_or_else(|| Utc::now())
+                    .unwrap_or_else(Utc::now)
             })
         });
 

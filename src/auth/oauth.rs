@@ -39,6 +39,16 @@ fn parse_claude_credentials(content: &str) -> Option<String> {
     parsed.claude_ai_oauth.and_then(|o| o.access_token)
 }
 
+fn parse_gemini_credentials(content: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct GeminiCreds {
+        #[serde(rename = "access_token")]
+        access_token: Option<String>,
+    }
+    let parsed: GeminiCreds = serde_json::from_str(content).ok()?;
+    parsed.access_token
+}
+
 pub struct OAuthFileResolver {
     pub file_paths: Vec<PathBuf>,
     pub parse_fn: fn(&str) -> Option<String>,
@@ -70,6 +80,23 @@ impl OAuthFileResolver {
             source_name: "claude".to_string(),
         }
     }
+
+    pub fn gemini() -> Self {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            paths.push(home.join(".gemini/oauth_creds.json"));
+        }
+        if let Ok(gemini_home) = std::env::var("GEMINI_CLI_HOME") {
+            if !gemini_home.is_empty() {
+                paths.insert(0, PathBuf::from(gemini_home).join("oauth_creds.json"));
+            }
+        }
+        Self {
+            file_paths: paths,
+            parse_fn: parse_gemini_credentials,
+            source_name: "gemini".to_string(),
+        }
+    }
 }
 
 #[async_trait]
@@ -94,6 +121,10 @@ impl AuthResolver for OAuthFileResolver {
             "no OAuth credentials found for {}",
             self.source_name
         )))
+    }
+
+    fn have_credentials(&self) -> bool {
+        self.file_paths.iter().any(|p| p.exists())
     }
 }
 
@@ -120,5 +151,50 @@ mod tests {
     fn parses_codex_auth_api_key_fallback() {
         let json = r#"{"OPENAI_API_KEY":"sk-proj-xxx"}"#;
         assert_eq!(parse_codex_auth(json).as_deref(), Some("sk-proj-xxx"));
+    }
+
+    #[test]
+    fn parses_gemini_credentials() {
+        let json = r#"{"access_token":"ya29.test-token","token_type":"Bearer","refresh_token":"1//0g-xxx","expiry_date":1776279276916}"#;
+        assert_eq!(
+            parse_gemini_credentials(json).as_deref(),
+            Some("ya29.test-token")
+        );
+    }
+
+    #[test]
+    fn parses_gemini_credentials_missing_token() {
+        let json = r#"{"token_type":"Bearer","refresh_token":"1//0g-xxx"}"#;
+        assert_eq!(parse_gemini_credentials(json).as_deref(), None);
+    }
+
+    #[test]
+    fn parses_gemini_credentials_empty() {
+        assert_eq!(parse_gemini_credentials("").as_deref(), None);
+    }
+
+    #[test]
+    fn oauth_have_credentials_true_when_file_exists() {
+        let path = std::env::temp_dir().join("quotas_test_oauth_have.json");
+        std::fs::write(&path, r#"{"access_token":"ya29.test"}"#).unwrap();
+        let resolver = OAuthFileResolver {
+            file_paths: vec![path.clone()],
+            parse_fn: parse_gemini_credentials,
+            source_name: "test".into(),
+        };
+        assert!(resolver.have_credentials());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn oauth_have_credentials_false_when_no_files() {
+        let path = std::env::temp_dir().join("quotas_test_oauth_no_such.json");
+        let _ = std::fs::remove_file(&path);
+        let resolver = OAuthFileResolver {
+            file_paths: vec![path],
+            parse_fn: parse_gemini_credentials,
+            source_name: "test".into(),
+        };
+        assert!(!resolver.have_credentials());
     }
 }

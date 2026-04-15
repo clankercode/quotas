@@ -48,6 +48,13 @@ pub struct ResolvedAuth {
 #[async_trait]
 pub trait AuthResolver: Send + Sync {
     async fn resolve(&self) -> Result<ResolvedAuth>;
+
+    /// Synchronous lightweight check whether credentials *might* exist.
+    /// Checks env vars, file existence, etc. without doing network I/O.
+    /// Default: true (assume credentials exist unless overridden).
+    fn have_credentials(&self) -> bool {
+        true
+    }
 }
 
 pub struct MultiResolver {
@@ -69,5 +76,60 @@ impl AuthResolver for MultiResolver {
             }
         }
         Err(Error::Auth("no valid credentials found".into()))
+    }
+
+    fn have_credentials(&self) -> bool {
+        self.resolvers.iter().any(|r| r.have_credentials())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct AlwaysHaveCreds;
+    #[async_trait]
+    impl AuthResolver for AlwaysHaveCreds {
+        async fn resolve(&self) -> Result<ResolvedAuth> {
+            Err(Error::Auth("stub".into()))
+        }
+        fn have_credentials(&self) -> bool {
+            true
+        }
+    }
+
+    struct NeverHaveCreds;
+    #[async_trait]
+    impl AuthResolver for NeverHaveCreds {
+        async fn resolve(&self) -> Result<ResolvedAuth> {
+            Err(Error::Auth("stub".into()))
+        }
+        fn have_credentials(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn multi_resolver_have_credentials_true_if_any() {
+        let mr = MultiResolver::new(vec![
+            Box::new(NeverHaveCreds),
+            Box::new(AlwaysHaveCreds),
+        ]);
+        assert!(mr.have_credentials());
+    }
+
+    #[test]
+    fn multi_resolver_have_credentials_false_if_none() {
+        let mr = MultiResolver::new(vec![
+            Box::new(NeverHaveCreds),
+            Box::new(NeverHaveCreds),
+        ]);
+        assert!(!mr.have_credentials());
+    }
+
+    #[test]
+    fn multi_resolver_have_credentials_true_with_empty() {
+        let mr = MultiResolver::new(vec![]);
+        assert!(!mr.have_credentials());
     }
 }
