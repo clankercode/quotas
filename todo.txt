@@ -1,0 +1,5 @@
+- [ ] minimax cutoff bars
+  - minimax on short terminals can cut off bars (card too small). that is okay under those circumstances, but it should show like `-- 2 more hidden --` in muted colors beneath. 
+- [ ] filter quota types
+  - for something like minimax with many different quotas, we might want to allow users to hide ones they don't care about (should be configurable on the main page for that provider)
+- [ ] edit config in TUI + persist some choices like toggling hidden minimax quotas
