@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod deepseek;
+pub mod gemini;
 pub mod kimi;
 pub mod mimo;
 pub mod minimax;
@@ -18,13 +19,14 @@ use serde::{Deserialize, Serialize};
 pub enum ProviderKind {
     Claude,
     Codex,
-    Minimax,
-    Zai,
-    Kimi,
     DeepSeek,
-    SiliconFlow,
-    OpenRouter,
+    Gemini,
+    Kimi,
     Mimo,
+    Minimax,
+    OpenRouter,
+    SiliconFlow,
+    Zai,
 }
 
 impl ProviderKind {
@@ -41,13 +43,14 @@ impl ProviderKind {
         match self {
             ProviderKind::Claude => "Claude",
             ProviderKind::Codex => "Codex",
-            ProviderKind::Minimax => "MiniMax",
-            ProviderKind::Zai => "Z.ai",
-            ProviderKind::Kimi => "Kimi",
             ProviderKind::DeepSeek => "DeepSeek",
-            ProviderKind::SiliconFlow => "SiliconFlow",
-            ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::Gemini => "Gemini",
+            ProviderKind::Kimi => "Kimi",
             ProviderKind::Mimo => "MiMo",
+            ProviderKind::Minimax => "MiniMax",
+            ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::SiliconFlow => "SiliconFlow",
+            ProviderKind::Zai => "Z.ai",
         }
     }
 
@@ -55,13 +58,14 @@ impl ProviderKind {
         match self {
             ProviderKind::Claude => "claude",
             ProviderKind::Codex => "codex",
-            ProviderKind::Minimax => "minimax",
-            ProviderKind::Zai => "zai",
-            ProviderKind::Kimi => "kimi",
             ProviderKind::DeepSeek => "deepseek",
-            ProviderKind::SiliconFlow => "siliconflow",
-            ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::Gemini => "gemini",
+            ProviderKind::Kimi => "kimi",
             ProviderKind::Mimo => "mimo",
+            ProviderKind::Minimax => "minimax",
+            ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::SiliconFlow => "siliconflow",
+            ProviderKind::Zai => "zai",
         }
     }
 
@@ -69,12 +73,13 @@ impl ProviderKind {
         &[
             ProviderKind::Claude,
             ProviderKind::Codex,
-            ProviderKind::Minimax,
-            ProviderKind::Zai,
-            ProviderKind::Kimi,
             ProviderKind::DeepSeek,
-            ProviderKind::SiliconFlow,
+            ProviderKind::Gemini,
+            ProviderKind::Kimi,
+            ProviderKind::Minimax,
             ProviderKind::OpenRouter,
+            ProviderKind::SiliconFlow,
+            ProviderKind::Zai,
             // ProviderKind::Mimo, // disabled — platform API requires browser cookie auth
         ]
     }

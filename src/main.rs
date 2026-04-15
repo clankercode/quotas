@@ -176,6 +176,17 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
+        ProviderKind::Gemini => {
+            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(EnvResolver::new(vec![("GEMINI_API_KEY", "gemini")])),
+                Box::new(FileResolver::new(
+                    vec![dirs::home_dir().unwrap_or_default().join(".gemini-api-key")],
+                    parse_key_file,
+                    "gemini",
+                )),
+            ];
+            Box::new(MultiResolver::new(resolvers))
+        }
         ProviderKind::SiliconFlow => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(EnvResolver::new(vec![
@@ -241,10 +252,11 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
         .filter_map(|n| match n.to_lowercase().as_str() {
             "claude" | "anthropic" => Some(ProviderKind::Claude),
             "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
+            "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
+            "gemini" => Some(ProviderKind::Gemini),
+            "kimi" | "moonshot" => Some(ProviderKind::Kimi),
             "minimax" => Some(ProviderKind::Minimax),
             "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
-            "kimi" | "moonshot" => Some(ProviderKind::Kimi),
-            "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
             "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
             "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
             "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
@@ -300,6 +312,7 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
         ProviderKind::DeepSeek => {
             Box::new(quotas::providers::deepseek::DeepSeekProvider::new(auth))
         }
+        ProviderKind::Gemini => Box::new(quotas::providers::gemini::GeminiProvider::new(auth)),
         ProviderKind::SiliconFlow => Box::new(
             quotas::providers::siliconflow::SiliconFlowProvider::new(auth),
         ),
