@@ -46,6 +46,7 @@ impl CodexProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             });
         }
 
@@ -66,6 +67,7 @@ impl CodexProvider {
             fetched_at: Utc::now(),
             raw_response: Some(body),
             auth_source: None,
+            cached_at: None,
         })
     }
 }
@@ -245,6 +247,7 @@ impl crate::providers::Provider for CodexProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
         }
     }

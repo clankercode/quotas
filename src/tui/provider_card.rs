@@ -22,8 +22,13 @@ impl ProviderCard {
     }
 
     pub fn freshness_label(&self) -> FreshnessLabel {
-        let secs = (Utc::now() - self.result.fetched_at).num_seconds();
-        FreshnessLabel::with_interval(secs, self.result.kind.auto_refresh_secs())
+        if let Some(cached_at) = self.result.cached_at {
+            let secs = (Utc::now() - cached_at).num_seconds();
+            FreshnessLabel::cached(secs)
+        } else {
+            let secs = (Utc::now() - self.result.fetched_at).num_seconds();
+            FreshnessLabel::with_interval(secs, self.result.kind.auto_refresh_secs())
+        }
     }
 
     pub fn primary_label(&self) -> String {

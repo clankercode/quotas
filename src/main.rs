@@ -59,6 +59,12 @@ struct Args {
     #[arg(long)]
     cached: bool,
 
+    /// Fetch fresh data only when cache is stale or missing (cache-first).
+    /// Unlike --cached, this will make API calls if data is stale.
+    /// Uses per-provider staleness thresholds from config (default 5 min).
+    #[arg(long)]
+    ensure_current: bool,
+
     /// Custom format template for statusline.
     /// Placeholders: %provider %remaining %limit %used %window %reset
     #[arg(long)]
@@ -339,6 +345,7 @@ fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
         fetched_at: chrono::Utc::now(),
         raw_response: None,
         auth_source: None,
+        cached_at: None,
     }
 }
 
@@ -349,6 +356,7 @@ fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
         fetched_at: chrono::Utc::now(),
         raw_response: None,
         auth_source: None,
+        cached_at: None,
     }
 }
 
@@ -365,6 +373,45 @@ fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
         .map(|k| fetch_provider_sync(k, config))
         .collect();
     cache::write_cache(&results);
+    results
+}
+
+/// Fetch with cache-first semantics: return cached data if fresh, otherwise
+/// fetch fresh data and update the cache. Uses per-provider staleness thresholds.
+fn fetch_with_staleness_check(
+    kinds: Vec<ProviderKind>,
+    config: &Config,
+) -> Vec<ProviderResult> {
+    let cache = cache::read_cache();
+    let now = chrono::Utc::now();
+    let mut results = Vec::with_capacity(kinds.len());
+    let mut fresh_results = Vec::new();
+
+    for kind in kinds {
+        let key = kind.slug().to_string();
+        let staleness_threshold = config.staleness.staleness_threshold(&key);
+
+        if let Some(entry) = cache.entries.get(&key) {
+            let age_secs = (now - entry.cached_at).num_seconds() as u64;
+            if age_secs < staleness_threshold {
+                // Cache hit — fresh enough, use cached result with its cached_at.
+                let mut result = entry.result.clone();
+                result.cached_at = Some(entry.cached_at);
+                results.push(result);
+                continue;
+            }
+        }
+        // Cache miss or stale — fetch fresh.
+        let result = fetch_provider_sync(kind, config);
+        fresh_results.push(result);
+    }
+
+    // Write all fresh results to cache.
+    if !fresh_results.is_empty() {
+        cache::write_cache(&fresh_results);
+    }
+
+    results.extend(fresh_results);
     results
 }
 
@@ -619,11 +666,22 @@ fn main() {
     if args.json {
         let results = if args.cached {
             let cache = cache::read_cache();
-            cache.entries.into_values().map(|e| e.result).collect()
+            cache
+                .entries
+                .into_values()
+                .map(|e| {
+                    let mut result = e.result;
+                    result.cached_at = Some(e.cached_at);
+                    result
+                })
+                .collect()
+        } else if args.ensure_current {
+            fetch_with_staleness_check(kinds, &config)
         } else {
             fetch_all(kinds, &config)
         };
-        println!("{}", JsonOutput::from_results(results).to_json(args.pretty));
+        let cache = cache::read_cache();
+        println!("{}", JsonOutput::from_results(results, &cache).to_json(args.pretty));
         return;
     }
 

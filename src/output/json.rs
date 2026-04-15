@@ -1,3 +1,4 @@
+use crate::cache::CacheFile;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus};
 use serde::Serialize;
 
@@ -43,43 +44,52 @@ pub struct ProviderJson {
     pub status: ProviderStatusJson,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_response: Option<serde_json::Value>,
 }
 
 impl JsonOutput {
-    pub fn from_results(results: Vec<ProviderResult>) -> Self {
+    pub fn from_results(results: Vec<ProviderResult>, cache: &CacheFile) -> Self {
         let providers = results
             .into_iter()
-            .map(|r| ProviderJson {
-                name: r.kind.display_name().to_lowercase(),
-                status: match r.status {
-                    ProviderStatus::Available { quota } => ProviderStatusJson::Available {
-                        plan_name: quota.plan_name,
-                        windows: quota
-                            .windows
-                            .into_iter()
-                            .map(|w| WindowJson {
-                                window_type: w.window_type,
-                                used: w.used,
-                                limit: w.limit,
-                                remaining: w.remaining,
-                                reset_at: w.reset_at,
-                                period_seconds: w.period_seconds,
-                            })
-                            .collect(),
-                        unlimited: quota.unlimited,
+            .map(|r| {
+                let cached_at = cache
+                    .entries
+                    .get(r.kind.slug())
+                    .map(|e| e.cached_at);
+                ProviderJson {
+                    name: r.kind.display_name().to_lowercase(),
+                    status: match r.status {
+                        ProviderStatus::Available { quota } => ProviderStatusJson::Available {
+                            plan_name: quota.plan_name,
+                            windows: quota
+                                .windows
+                                .into_iter()
+                                .map(|w| WindowJson {
+                                    window_type: w.window_type,
+                                    used: w.used,
+                                    limit: w.limit,
+                                    remaining: w.remaining,
+                                    reset_at: w.reset_at,
+                                    period_seconds: w.period_seconds,
+                                })
+                                .collect(),
+                            unlimited: quota.unlimited,
+                        },
+                        ProviderStatus::Unavailable { info } => ProviderStatusJson::Unavailable {
+                            reason: info.reason,
+                            console_url: info.console_url,
+                        },
+                        ProviderStatus::AuthRequired => ProviderStatusJson::AuthRequired,
+                        ProviderStatus::NetworkError { message } => {
+                            ProviderStatusJson::NetworkError { message }
+                        }
                     },
-                    ProviderStatus::Unavailable { info } => ProviderStatusJson::Unavailable {
-                        reason: info.reason,
-                        console_url: info.console_url,
-                    },
-                    ProviderStatus::AuthRequired => ProviderStatusJson::AuthRequired,
-                    ProviderStatus::NetworkError { message } => {
-                        ProviderStatusJson::NetworkError { message }
-                    }
-                },
-                fetched_at: r.fetched_at,
-                raw_response: r.raw_response,
+                    fetched_at: r.fetched_at,
+                    cached_at,
+                    raw_response: r.raw_response,
+                }
             })
             .collect();
 

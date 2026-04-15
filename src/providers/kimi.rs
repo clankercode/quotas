@@ -56,6 +56,7 @@ impl KimiProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             });
         }
 
@@ -76,6 +77,7 @@ impl KimiProvider {
             fetched_at: Utc::now(),
             raw_response: Some(body),
             auth_source: None,
+            cached_at: None,
         })
     }
 
@@ -99,6 +101,7 @@ impl KimiProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             });
         }
 

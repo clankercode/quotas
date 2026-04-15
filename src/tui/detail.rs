@@ -240,8 +240,13 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, sho
 }
 
 fn freshness_span(result: &ProviderResult) -> Span<'static> {
-    let age = (Utc::now() - result.fetched_at).num_seconds().max(0);
-    let label = FreshnessLabel::with_interval(age, result.kind.auto_refresh_secs());
+    let label = if let Some(cached_at) = result.cached_at {
+        let age = (Utc::now() - cached_at).num_seconds().max(0);
+        FreshnessLabel::cached(age)
+    } else {
+        let age = (Utc::now() - result.fetched_at).num_seconds().max(0);
+        FreshnessLabel::with_interval(age, result.kind.auto_refresh_secs())
+    };
     let style = match label.staleness {
         Staleness::Fresh => Style::new().cyan(),
         Staleness::Warning => Style::new().yellow(),

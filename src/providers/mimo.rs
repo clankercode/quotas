@@ -107,6 +107,7 @@ impl MimoProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             }));
         }
 
@@ -132,6 +133,7 @@ impl MimoProvider {
                     fetched_at: Utc::now(),
                     raw_response: Some(body),
                     auth_source: None,
+                    cached_at: None,
                 }));
             }
         }
@@ -143,6 +145,7 @@ impl MimoProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             })),
             Err(_) => Ok(None),
         }
@@ -176,6 +179,7 @@ impl MimoProvider {
                         fetched_at: Utc::now(),
                         raw_response: Some(body),
                         auth_source: None,
+                        cached_at: None,
                     });
                 }
                 if status < 400 {
@@ -192,6 +196,7 @@ impl MimoProvider {
                             fetched_at: Utc::now(),
                             raw_response: Some(body),
                             auth_source: None,
+                            cached_at: None,
                         });
                     }
                 }
@@ -222,6 +227,7 @@ impl MimoProvider {
                         fetched_at: Utc::now(),
                         raw_response: Some(body),
                         auth_source: None,
+                        cached_at: None,
                     });
                 }
                 if status < 400 {
@@ -232,6 +238,7 @@ impl MimoProvider {
                         fetched_at: Utc::now(),
                         raw_response: Some(body),
                         auth_source: None,
+                        cached_at: None,
                     });
                 }
             }
@@ -251,6 +258,7 @@ impl MimoProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
             None => Ok(ProviderResult {
                 kind: ProviderKind::Mimo,
@@ -263,6 +271,7 @@ impl MimoProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
         }
     }

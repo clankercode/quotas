@@ -124,6 +124,9 @@ pub struct ProviderResult {
     pub raw_response: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_source: Option<String>,
+    /// Set when this result was read from cache (the time it was originally fetched).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_at: Option<DateTime<Utc>>,
 }
 
 #[async_trait]

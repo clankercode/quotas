@@ -49,6 +49,7 @@ impl ClaudeProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             });
         }
 
@@ -76,6 +77,7 @@ impl ClaudeProvider {
             fetched_at: Utc::now(),
             raw_response: Some(body),
             auth_source: None,
+            cached_at: None,
         })
     }
 }
@@ -198,6 +200,7 @@ impl crate::providers::Provider for ClaudeProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
         }
     }

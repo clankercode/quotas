@@ -149,6 +149,7 @@ mod tests {
             fetched_at: Utc::now(),
             raw_response: None,
             auth_source: None,
+            cached_at: None,
         }
     }
 
@@ -165,6 +166,7 @@ mod tests {
             fetched_at: Utc::now(),
             raw_response: None,
             auth_source: None,
+            cached_at: None,
         }
     }
 
@@ -175,6 +177,7 @@ mod tests {
             fetched_at: Utc::now(),
             raw_response: None,
             auth_source: None,
+            cached_at: None,
         }
     }
 

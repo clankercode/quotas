@@ -1,11 +1,42 @@
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StalenessConfig {
+    /// Default staleness threshold in seconds (default: 300 = 5 minutes).
+    pub default_secs: u64,
+    /// Per-provider overrides: provider name -> staleness threshold in seconds.
+    #[serde(rename = "providers")]
+    pub provider_overrides: BTreeMap<String, u64>,
+}
+
+impl StalenessConfig {
+    /// Returns the staleness threshold for a given provider slug.
+    pub fn staleness_threshold(&self, provider: &str) -> u64 {
+        self.provider_overrides
+            .get(provider)
+            .copied()
+            .unwrap_or(self.default_secs)
+    }
+}
+
+impl Default for StalenessConfig {
+    fn default() -> Self {
+        Self {
+            default_secs: 300,
+            provider_overrides: BTreeMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub statusline: StatusLine,
+    pub staleness: StalenessConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -829,10 +829,15 @@ impl Dashboard {
             ))
         } else {
             // Freshness progress bar behind the label text.
-            let elapsed = (chrono::Utc::now() - result.fetched_at)
-                .num_seconds()
-                .max(0);
-            let freshness = FreshnessLabel::with_interval(elapsed, result.kind.auto_refresh_secs());
+            let freshness = if let Some(cached_at) = result.cached_at {
+                let elapsed = (chrono::Utc::now() - cached_at).num_seconds().max(0);
+                FreshnessLabel::cached(elapsed)
+            } else {
+                let elapsed = (chrono::Utc::now() - result.fetched_at)
+                    .num_seconds()
+                    .max(0);
+                FreshnessLabel::with_interval(elapsed, result.kind.auto_refresh_secs())
+            };
             let fresh_str = &freshness.label;
 
             let field_w = fresh_str.chars().count().min(avail_for_fresh);

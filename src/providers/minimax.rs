@@ -49,6 +49,7 @@ impl MinimaxProvider {
                     fetched_at: Utc::now(),
                     raw_response: Some(body),
                     auth_source: None,
+                    cached_at: None,
                 });
             }
         }
@@ -72,6 +73,7 @@ impl MinimaxProvider {
             fetched_at: Utc::now(),
             raw_response: Some(body),
             auth_source: None,
+            cached_at: None,
         })
     }
 
@@ -217,6 +219,7 @@ impl crate::providers::Provider for MinimaxProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
         }
     }

@@ -47,6 +47,7 @@ impl SiliconFlowProvider {
                 fetched_at: Utc::now(),
                 raw_response: Some(body),
                 auth_source: None,
+                cached_at: None,
             });
         }
 
@@ -57,6 +58,7 @@ impl SiliconFlowProvider {
             fetched_at: Utc::now(),
             raw_response: Some(body),
             auth_source: None,
+            cached_at: None,
         })
     }
 }
@@ -155,6 +157,7 @@ impl crate::providers::Provider for SiliconFlowProvider {
                 fetched_at: Utc::now(),
                 raw_response: None,
                 auth_source: None,
+                cached_at: None,
             }),
         }
     }
