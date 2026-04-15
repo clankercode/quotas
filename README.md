@@ -13,6 +13,7 @@ a compact statusline for shell prompts, or filterable JSON.
 | **Claude** (Max/Pro subscription or API key) | `$CLAUDE_CONFIG_DIR/.credentials.json` → `~/.claude/.credentials.json` → `ANTHROPIC_API_KEY` | `GET /api/oauth/usage` on `api.anthropic.com` |
 | **Codex** / ChatGPT subscription | `~/.codex/auth.json` → `OPENAI_API_KEY` | `GET /backend-api/wham/usage` on `chatgpt.com` |
 | **MiniMax** Token Plan | `MINIMAX_API_KEY` → `~/.minimax` | `GET /v1/api/openplatform/coding_plan/remains` on `api.minimax.io` |
+| **Gemini** (Google AI Studio) | `GOOGLE_API_KEY` → ADC credentials | `POST /v1internal:retrieveUserQuota` on `cloudcode-pa.googleapis.com` |
 | **Kimi** (Coding Plan + PAYG) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `GET /coding/v1/usages` and `/v1/users/me/balance` |
 | **Z.ai / GLM** Coding Plan | `ZHIPU_API_KEY` / `ZAI_API_KEY` → `~/.api-zai` | `GET /api/monitor/usage/quota/limit` on `api.z.ai` |
 | **DeepSeek** | `DEEPSEEK_API_KEY` → `~/.deepseek` | `GET /user/balance` on `api.deepseek.com` |
@@ -85,4 +86,4 @@ Each provider result reports one of:
 
 ## License
 
-Dual-licensed under MIT OR Apache-2.0.
+Dual-licensed under The Unlicense OR CC0-1.0.
