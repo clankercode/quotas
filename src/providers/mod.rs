@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
 pub mod kimi;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 pub enum ProviderKind {
     Claude,
     Codex,
+    Cursor,
     DeepSeek,
     Gemini,
     Kimi,
@@ -43,6 +45,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Claude => "Claude",
             ProviderKind::Codex => "Codex",
+            ProviderKind::Cursor => "Cursor",
             ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::Kimi => "Kimi",
@@ -58,6 +61,7 @@ impl ProviderKind {
         match self {
             ProviderKind::Claude => "claude",
             ProviderKind::Codex => "codex",
+            ProviderKind::Cursor => "cursor",
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Gemini => "gemini",
             ProviderKind::Kimi => "kimi",
@@ -73,6 +77,7 @@ impl ProviderKind {
         &[
             ProviderKind::Claude,
             ProviderKind::Codex,
+            ProviderKind::Cursor,
             ProviderKind::DeepSeek,
             ProviderKind::Gemini,
             ProviderKind::Kimi,

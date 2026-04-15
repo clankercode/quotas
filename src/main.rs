@@ -11,6 +11,7 @@ use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::refresh;
+use quotas::auth::cursor::CursorAuthResolver;
 use quotas::auth::{AuthResolver, MultiResolver};
 use quotas::cache;
 use quotas::config::Config;
@@ -165,6 +166,9 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
+        ProviderKind::Cursor => {
+            Box::new(CursorAuthResolver::new())
+        }
         ProviderKind::DeepSeek => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(EnvResolver::new(vec![("DEEPSEEK_API_KEY", "deepseek")])),
@@ -252,6 +256,7 @@ fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
         .filter_map(|n| match n.to_lowercase().as_str() {
             "claude" | "anthropic" => Some(ProviderKind::Claude),
             "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
+            "cursor" => Some(ProviderKind::Cursor),
             "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
             "gemini" => Some(ProviderKind::Gemini),
             "kimi" | "moonshot" => Some(ProviderKind::Kimi),
@@ -302,6 +307,7 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
     let provider: Box<dyn Provider> = match kind {
         ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
         ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
+        ProviderKind::Cursor => Box::new(quotas::providers::cursor::CursorProvider::new(auth)),
         ProviderKind::Minimax => Box::new(
             quotas::providers::minimax::MinimaxProvider::with_multi_resolver(MultiResolver::new(
                 vec![auth],

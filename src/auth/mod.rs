@@ -1,5 +1,6 @@
 pub mod env;
 pub mod file;
+pub mod cursor;
 pub mod oauth;
 pub mod opencode;
 pub mod refresh;
@@ -24,6 +25,16 @@ impl AuthCredential {
             AuthCredential::Bearer(s) | AuthCredential::Token(s) => Ok(s.as_str()),
             AuthCredential::Cookie(_) => Err(Error::Auth(
                 "cookie credential cannot be used as bearer token".into(),
+            )),
+        }
+    }
+
+    /// Extract the cookie string. Only valid for Cookie credentials.
+    pub fn unwrap_cookie(&self) -> Result<&str> {
+        match self {
+            AuthCredential::Cookie(s) => Ok(s),
+            _ => Err(Error::Auth(
+                "non-cookie credential cannot be used as cookie".into(),
             )),
         }
     }
