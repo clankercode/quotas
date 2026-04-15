@@ -52,6 +52,7 @@ pub struct Dashboard {
     pub show_detail: bool,
     pub detail_scroll: u16,
     pub spinner_frame: usize,
+    pub show_all_windows: bool,
     last_layout: Cell<GridLayout>,
     /// Cached visual order, locked in when all entries are loaded.
     /// Reset to identity order on first load; refreshes don't reshuffle.
@@ -75,6 +76,7 @@ impl Dashboard {
             show_detail: false,
             detail_scroll: 0,
             spinner_frame: 0,
+            show_all_windows: false,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -96,6 +98,7 @@ impl Dashboard {
             show_detail: false,
             detail_scroll: 0,
             spinner_frame: 0,
+            show_all_windows: false,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -157,6 +160,16 @@ impl Dashboard {
 
     pub fn scroll_detail(&mut self, delta: i16) {
         self.detail_scroll = (self.detail_scroll as i32 + delta as i32).max(0) as u16;
+    }
+
+    fn window_visible(&self, w: &crate::providers::QuotaWindow) -> bool {
+        if self.show_all_windows {
+            return true;
+        }
+        if bar::autohide_window(&w.window_type) {
+            return false;
+        }
+        w.limit > 0 || bar::currency_window(&w.window_type).is_some()
     }
 
     /// Navigate to the previous/next provider while in detail view, cycling
@@ -261,7 +274,7 @@ impl Dashboard {
         let mut indices: Vec<usize> = (0..self.entries.len())
             .filter(|&i| !Self::is_auth_required_entry(&self.entries[i]))
             .collect();
-        indices.sort_by_key(|&i| Self::card_weight(&self.entries[i]));
+        indices.sort_by_key(|&i| self.card_weight(&self.entries[i]));
         indices
     }
 
@@ -421,7 +434,7 @@ impl Dashboard {
                 let mut row_h: Vec<u16> = vec![MIN_CARD_H; nr];
                 for (i, &entry_idx) in slice.iter().enumerate() {
                     let (row_i, _, _) = placements[i];
-                    let h = Self::natural_card_height(&self.entries[entry_idx]);
+                    let h = self.natural_card_height(&self.entries[entry_idx]);
                     if h > row_h[row_i] {
                         row_h[row_i] = h;
                     }
@@ -641,7 +654,7 @@ impl Dashboard {
         for (i, visual_pos) in (page_start..page_end).enumerate() {
             let (row_i, _, _) = placements[i];
             let entry_idx = order[visual_pos];
-            let h = Self::natural_card_height(&self.entries[entry_idx]);
+            let h = self.natural_card_height(&self.entries[entry_idx]);
             if h > row_heights[row_i] {
                 row_heights[row_i] = h;
             }
@@ -694,7 +707,7 @@ impl Dashboard {
 
     /// Natural height of a card in rows including the border (2 lines).
     /// Used so row heights track content rather than filling all available space.
-    fn natural_card_height(entry: &ProviderEntry) -> u16 {
+    fn natural_card_height(&self, entry: &ProviderEntry) -> u16 {
         match entry {
             ProviderEntry::Loading => MIN_CARD_H,
             ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => match &r.status {
@@ -702,7 +715,7 @@ impl Dashboard {
                     let visible = quota
                         .windows
                         .iter()
-                        .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
+                        .filter(|w| self.window_visible(w))
                         .count();
                     // 2 border + 1 header (name+freshness) + 1 plan name
                     let fixed: u16 = 4;
@@ -726,7 +739,7 @@ impl Dashboard {
         }
     }
 
-    fn card_weight(entry: &ProviderEntry) -> u32 {
+    fn card_weight(&self, entry: &ProviderEntry) -> u32 {
         match entry {
             ProviderEntry::Loading => 4,
             ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => match &r.status {
@@ -734,7 +747,7 @@ impl Dashboard {
                     let visible = quota
                         .windows
                         .iter()
-                        .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
+                        .filter(|w| self.window_visible(w))
                         .count()
                         .max(1) as u32;
                     // Minimax renders 5h/7d pairs on one line, so its
@@ -752,7 +765,7 @@ impl Dashboard {
                 }
                 // Push auth-required cards to the end of the visual order.
                 ProviderStatus::AuthRequired => 20,
-                _ => 5,
+                _ => 15,
             },
         }
     }
@@ -910,7 +923,7 @@ impl Dashboard {
                 let mut visible: Vec<&QuotaWindow> = quota
                     .windows
                     .iter()
-                    .filter(|w| w.limit > 0 || bar::currency_window(&w.window_type).is_some())
+                    .filter(|w| self.window_visible(w))
                     .collect();
                 visible.sort_by_key(|w| bar::window_sort_key(w));
                 let total = visible.len();

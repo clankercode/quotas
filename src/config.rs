@@ -33,10 +33,17 @@ impl Default for StalenessConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
+pub struct Ui {
+    pub show_all_windows: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub statusline: StatusLine,
     pub staleness: StalenessConfig,
+    pub ui: Ui,
 }
 
 #[derive(Debug, Clone, Deserialize)]

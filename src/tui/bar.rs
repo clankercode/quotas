@@ -230,6 +230,12 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "topped_up_cny" | "topped_up_usd" => "topped-up",
         "credits_usd" => "credits",
         "key_limit_usd" => "key limit",
+        // Cursor-specific short labels
+        "api_usage_pct" => "API%",
+        "auto_usage_pct" => "Auto%",
+        "billing_cycle" => "BC",
+        "spend_limit" => "$ Lim",
+        "bonus" => "Bonus",
         other => other,
     };
     if !show_headers {
@@ -243,6 +249,12 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         }
     }
     renamed.to_string()
+}
+
+/// Whether a window type should be hidden by default to keep cards compact.
+/// Users can reveal them via `ui.show_all_windows = true` in config.
+pub fn autohide_window(window_type: &str) -> bool {
+    matches!(window_type, "billing_cycle")
 }
 
 /// Suffix-preserving truncation: keeps the *end* of the string so that

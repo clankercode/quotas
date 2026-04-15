@@ -537,6 +537,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     }
 
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
+    dashboard.show_all_windows = config.ui.show_all_windows;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
