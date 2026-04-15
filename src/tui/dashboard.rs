@@ -889,6 +889,7 @@ impl Dashboard {
                 Staleness::Fresh => (Color::Cyan, Color::Rgb(0, 42, 28)),
                 Staleness::Warning => (Color::Yellow, Color::Rgb(65, 38, 0)),
                 Staleness::Stale => (Color::Red, Color::Rgb(65, 0, 0)),
+                Staleness::Cached => (Color::Green, Color::Rgb(0, 65, 0)),
             };
 
             let filled_str: String = text.chars().take(fill_n).collect();
@@ -947,7 +948,17 @@ impl Dashboard {
 
                 let (mode, shown_count) = pick_layout(total, usable_for_rows);
 
-                let label_w: usize = 12;
+                let label_w: usize = visible
+                    .iter()
+                    .take(shown_count)
+                    .map(|w| {
+                        bar::display_label(&w.window_type, show_headers)
+                            .chars()
+                            .count()
+                    })
+                    .max()
+                    .unwrap_or(6)
+                    .clamp(6, 10);
                 let bar_width = inner.width.saturating_sub(label_w as u16 + 2).clamp(10, 64);
 
                 let mut last_bucket: Option<u8> = None;

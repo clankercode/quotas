@@ -251,6 +251,7 @@ fn freshness_span(result: &ProviderResult) -> Span<'static> {
         Staleness::Fresh => Style::new().cyan(),
         Staleness::Warning => Style::new().yellow(),
         Staleness::Stale => Style::new().red(),
+        Staleness::Cached => Style::new().green(),
     };
     Span::styled(label.label, style)
 }

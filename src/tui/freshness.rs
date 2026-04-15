@@ -3,6 +3,7 @@ pub enum Staleness {
     Fresh,
     Warning,
     Stale,
+    Cached,
 }
 
 pub struct FreshnessLabel {
@@ -50,7 +51,7 @@ impl FreshnessLabel {
         };
         Self {
             label,
-            staleness: Staleness::Stale,
+            staleness: Staleness::Cached,
             fraction: 1.0,
             is_cached: true,
         }
