@@ -516,9 +516,12 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
             // Stale cache — show old data while refreshing in background.
             let mut result = entry.result.clone();
             result.cached_at = Some(entry.cached_at);
-            initial_entries.push(ProviderEntry::Refreshing(result));
             if has_creds {
+                initial_entries.push(ProviderEntry::Refreshing(result));
                 fetch_indices.push(idx);
+            } else {
+                // No credentials to refresh — just show the stale cached data.
+                initial_entries.push(ProviderEntry::Done(result));
             }
         } else if has_creds {
             // No cache but credentials exist — show loading spinner.
@@ -621,7 +624,6 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                     MouseEventKind::Down(MouseButton::Left) => {
                         match dashboard.hit_test(me.column, me.row) {
                             Some(HitResult::Refresh) => {
-                                dashboard.reset_loading();
                                 let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                                 rx = new_rx;
                                 cur_tx = new_tx;
@@ -629,6 +631,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 let fetchable: Vec<usize> = (0..kinds.len())
                                     .filter(|&i| auth_resolvers[i].have_credentials())
                                     .collect();
+                                for &idx in &fetchable {
+                                    dashboard.reset_one(idx);
+                                }
                                 spawn_fetches_for(
                                     &rt,
                                     &kinds,
@@ -636,8 +641,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                     config.clone(),
                                     cur_tx.clone(),
                                 );
-                                for t in last_refresh.iter_mut() {
-                                    *t = Instant::now();
+                                for &idx in &fetchable {
+                                    last_refresh[idx] = Instant::now();
                                 }
                             }
                             Some(HitResult::Quit) => return Ok(()),
@@ -669,7 +674,6 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        dashboard.reset_loading();
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
                         rx = new_rx;
                         cur_tx = new_tx;
@@ -677,6 +681,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         let fetchable: Vec<usize> = (0..kinds.len())
                             .filter(|&i| auth_resolvers[i].have_credentials())
                             .collect();
+                        for &idx in &fetchable {
+                            dashboard.reset_one(idx);
+                        }
                         spawn_fetches_for(
                             &rt,
                             &kinds,
@@ -684,8 +691,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                             config.clone(),
                             cur_tx.clone(),
                         );
-                        for t in last_refresh.iter_mut() {
-                            *t = Instant::now();
+                        for &idx in &fetchable {
+                            last_refresh[idx] = Instant::now();
                         }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {

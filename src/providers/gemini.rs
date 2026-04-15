@@ -28,8 +28,7 @@ impl GeminiProvider {
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({
                 // Empty project_id means use the user's default project
-                "project": "",
-                "userAgent": "quotas-cli"
+                "project": ""
             }))
             .send()
             .await?;
