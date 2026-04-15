@@ -54,6 +54,11 @@ struct Args {
     #[arg(long)]
     no_bg_refresh: bool,
 
+    /// Read exclusively from cache — disables all automatic refreshes.
+    /// Manual refresh (R key in TUI, refresh button) remains available.
+    #[arg(long)]
+    cached: bool,
+
     /// Custom format template for statusline.
     /// Placeholders: %provider %remaining %limit %used %window %reset
     #[arg(long)]
@@ -379,7 +384,7 @@ fn spawn_fetches(
     }
 }
 
-fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
+fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
@@ -410,18 +415,20 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config) -> io::Result<()> {
 
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
-        for (idx, kind) in kinds.iter().cloned().enumerate() {
-            if dashboard.is_entry_done(idx)
-                && last_refresh[idx].elapsed() >= auto_refresh_interval(kind)
-            {
-                dashboard.reset_one(idx);
-                let tx2 = cur_tx.clone();
-                let config2 = config.clone();
-                rt.spawn(async move {
-                    let result = fetch_one(kind, &config2).await;
-                    let _ = tx2.send((idx, result));
-                });
-                last_refresh[idx] = Instant::now();
+        if !cached {
+            for (idx, kind) in kinds.iter().cloned().enumerate() {
+                if dashboard.is_entry_done(idx)
+                    && last_refresh[idx].elapsed() >= auto_refresh_interval(kind)
+                {
+                    dashboard.reset_one(idx);
+                    let tx2 = cur_tx.clone();
+                    let config2 = config.clone();
+                    rt.spawn(async move {
+                        let result = fetch_one(kind, &config2).await;
+                        let _ = tx2.send((idx, result));
+                    });
+                    last_refresh[idx] = Instant::now();
+                }
             }
         }
 
@@ -610,9 +617,13 @@ fn main() {
     }
 
     if args.json {
-        let results = fetch_all(kinds, &config);
-        let output = JsonOutput::from_results(results);
-        println!("{}", output.to_json(args.pretty));
+        let results = if args.cached {
+            let cache = cache::read_cache();
+            cache.entries.into_values().map(|e| e.result).collect()
+        } else {
+            fetch_all(kinds, &config)
+        };
+        println!("{}", JsonOutput::from_results(results).to_json(args.pretty));
         return;
     }
 
@@ -621,7 +632,7 @@ fn main() {
         return;
     }
 
-    if let Err(e) = run_tui(kinds.clone(), config) {
+    if let Err(e) = run_tui(kinds.clone(), config, args.cached) {
         eprintln!("Error: {:?}", e);
     }
 }
@@ -653,7 +664,7 @@ fn run_statusline(args: &Args, config: &Config) {
     } else {
         config.statusline.bg_refresh
     };
-    if bg_enabled {
+    if bg_enabled && !args.cached {
         if let Some(age) = cache::cache_age(&cache) {
             if age.as_secs() >= BG_REFRESH_THRESHOLD_SECS {
                 let _ = spawn_bg_refresh();
