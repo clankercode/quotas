@@ -16,8 +16,13 @@ impl DetailView {
 
     pub fn render(&self, width: u16) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
-        let label_w: usize = (width as usize / 3).clamp(16, 50);
-        let bar_width: u16 = width.saturating_sub(label_w as u16 + 2).clamp(10, 60);
+        let pct_w: u16 = 10; // room for " 100% used"
+        let indent: u16 = 2;
+        let gap: u16 = 1; // space between label and bar
+
+        // These are refined once we know the actual labels in the provider.
+        let label_w: usize;
+        let bar_width: u16;
 
         // Header — freshness only when we have valid auth data.
         let show_freshness = !matches!(self.result.status, ProviderStatus::AuthRequired);
@@ -68,6 +73,24 @@ impl DetailView {
                     let buckets_seen: BTreeSet<u8> =
                         sorted.iter().map(|w| bar::window_sort_key(w).0).collect();
                     let show_headers = sorted.len() >= 3 && buckets_seen.len() >= 2;
+
+                    // Compute label width from actual labels so we don't waste space.
+                    label_w = sorted
+                        .iter()
+                        .map(|w| {
+                            bar::display_label(&w.window_type, show_headers)
+                                .chars()
+                                .count()
+                        })
+                        .max()
+                        .unwrap_or(12)
+                        .clamp(8, 20);
+                    bar_width = width
+                        .saturating_sub(indent + label_w as u16 + gap + pct_w)
+                        .clamp(10, width.saturating_sub(indent + gap + pct_w));
+
+                    let subrow_indent = " ".repeat((indent + gap + label_w as u16) as usize);
+
                     let mut last_bucket: Option<u8> = None;
                     for window in sorted {
                         let bucket = bar::window_sort_key(window).0;
@@ -80,7 +103,14 @@ impl DetailView {
                             }
                             last_bucket = Some(bucket);
                         }
-                        render_window(&mut lines, window, bar_width, label_w, show_headers);
+                        render_window(
+                            &mut lines,
+                            window,
+                            bar_width,
+                            label_w,
+                            show_headers,
+                            subrow_indent.clone(),
+                        );
                         lines.push(Line::from(""));
                     }
                 }
@@ -153,6 +183,7 @@ fn render_window(
     bar_width: u16,
     label_w: usize,
     show_headers: bool,
+    subrow_indent: String,
 ) {
     let label_src = bar::display_label(&w.window_type, show_headers);
     // Special-case currency balance rows: no bar, just the formatted amount.
@@ -196,7 +227,7 @@ fn render_window(
 
     // Row 2: exact numbers
     lines.push(Line::from(vec![
-        Span::raw("                 "),
+        Span::raw(subrow_indent.clone()),
         Span::raw(format!(
             "{} used · {} left · {} cap",
             fmt_exact(used),
@@ -211,7 +242,7 @@ fn render_window(
         let rel = humanize_duration(reset - Utc::now());
         let abs = reset.format("%Y-%m-%d %H:%M UTC").to_string();
         lines.push(Line::from(vec![
-            Span::raw("                 "),
+            Span::raw(subrow_indent.clone()),
             Span::raw(format!("resets in {} · {}", rel, abs)).dim(),
         ]));
     }
@@ -248,7 +279,7 @@ fn render_window(
             )
         };
         lines.push(Line::from(vec![
-            Span::raw("                 "),
+            Span::raw(subrow_indent),
             Span::styled(label, style),
         ]));
     }
