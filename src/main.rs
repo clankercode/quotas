@@ -78,6 +78,23 @@ struct Args {
 
     #[arg(long, value_delimiter = ',')]
     provider: Vec<String>,
+
+    /// Render the TUI grid to a text snapshot and exit (no tmux needed).
+    /// Useful for automated layout testing at specific resolutions.
+    #[arg(long, hide = true)]
+    snap: bool,
+
+    /// Width for --snap mode (default: 160).
+    #[arg(long, default_value = "160", hide = true)]
+    snap_width: u16,
+
+    /// Height for --snap mode (default: 50).
+    #[arg(long, default_value = "50", hide = true)]
+    snap_height: u16,
+
+    /// Output file for --snap mode. Writes to stdout if omitted.
+    #[arg(long, hide = true)]
+    snap_output: Option<String>,
 }
 
 /// Parse a credentials file that may be either a raw token on the first
@@ -455,6 +472,71 @@ fn spawn_fetches_for(
     }
 }
 
+fn run_snap(
+    kinds: Vec<ProviderKind>,
+    _config: Config,
+    width: u16,
+    height: u16,
+    output: Option<&str>,
+) {
+    use ratatui::backend::TestBackend;
+
+    let disk_cache = cache::read_cache();
+    let now = chrono::Utc::now();
+
+    let entries: Vec<ProviderEntry> = kinds
+        .iter()
+        .map(|kind| {
+            let key = kind.slug().to_string();
+            if let Some(entry) = disk_cache.entries.get(&key) {
+                let mut result = entry.result.clone();
+                result.cached_at = Some(entry.cached_at);
+                ProviderEntry::Done(result)
+            } else {
+                ProviderEntry::Done(ProviderResult {
+                    kind: *kind,
+                    status: quotas::providers::ProviderStatus::AuthRequired,
+                    fetched_at: now,
+                    raw_response: None,
+                    auth_source: None,
+                    cached_at: None,
+                })
+            }
+        })
+        .collect();
+
+    let mut dashboard = Dashboard::new_with_entries(kinds, entries);
+
+    // Apply config settings (hardcoded defaults for snap mode).
+    dashboard.show_all_windows = false;
+    dashboard.vertical_spanning = false;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| dashboard.render(f)).unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let mut lines = Vec::new();
+    for y in 0..height {
+        let mut line = String::new();
+        for x in 0..width {
+            line.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    let out = lines.join("\n") + "\n";
+
+    if let Some(path) = output {
+        if let Err(e) = std::fs::write(path, &out) {
+            eprintln!("Error writing to {path}: {e}");
+            std::process::exit(1);
+        }
+        eprintln!("Wrote {path}");
+    } else {
+        print!("{out}");
+    }
+}
+
 fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -538,6 +620,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
 
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
     dashboard.show_all_windows = config.ui.show_all_windows;
+    dashboard.vertical_spanning = config.ui.vertical_spanning;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -837,6 +920,11 @@ fn main() {
 
     if args.statusline {
         run_statusline(&args, &config);
+        return;
+    }
+
+    if args.snap {
+        run_snap(kinds, config, args.snap_width, args.snap_height, args.snap_output.as_deref());
         return;
     }
 

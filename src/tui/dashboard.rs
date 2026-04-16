@@ -53,6 +53,7 @@ pub struct Dashboard {
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     pub show_all_windows: bool,
+    pub vertical_spanning: bool,
     last_layout: Cell<GridLayout>,
     /// Cached visual order, locked in when all entries are loaded.
     /// Reset to identity order on first load; refreshes don't reshuffle.
@@ -77,6 +78,7 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
+            vertical_spanning: false,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -99,6 +101,7 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
+            vertical_spanning: false,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -360,40 +363,57 @@ impl Dashboard {
 
     /// Assigns each card in `page_order` a (row, col, span) placement.
     /// MiniMax spans 2 columns; all other cards span 1.
+    /// When `allow_spanning` is true, MiniMax also spans 2 rows (2×2).
     /// Cards wrap to the next row when they would overflow `cols`.
     fn flow_placements(
         entries: &[ProviderEntry],
         page_order: &[usize],
         cols: usize,
+        allow_spanning: bool,
     ) -> Vec<(usize, usize, usize)> {
+        if cols == 0 || page_order.is_empty() {
+            return Vec::new();
+        }
+
+        // Occupancy grid for tracking claimed cells when spanning is enabled.
+        let max_rows = page_order.len() * 2 + 1; // generous upper bound
+        let mut occupied: Vec<Vec<bool>> = vec![vec![false; cols]; max_rows];
         let mut out = Vec::with_capacity(page_order.len());
-        let mut row = 0usize;
-        let mut col = 0usize;
+        let mut scan_row = 0usize;
 
         for &entry_idx in page_order {
-            let span = match &entries[entry_idx] {
+            let is_minimax = matches!(&entries[entry_idx],
                 ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
-                    if r.kind == ProviderKind::Minimax =>
-                {
-                    2
+                    if r.kind == ProviderKind::Minimax);
+
+            let span = if is_minimax { 2 } else { 1 }.min(cols);
+            let row_span = if is_minimax && allow_spanning { 2 } else { 1 };
+
+            // Find the first (row, col) where all span×row_span cells are free.
+            let mut placed = false;
+            let mut r = scan_row;
+            while r < max_rows && !placed {
+                for c in 0..=cols.saturating_sub(span) {
+                    let fits = (r..r + row_span)
+                        .all(|rr| rr < max_rows && (c..c + span).all(|cc| !occupied[rr][cc]));
+                    if fits {
+                        for row in occupied.iter_mut().skip(r).take(row_span) {
+                            for cell in row.iter_mut().skip(c).take(span) {
+                                *cell = true;
+                            }
+                        }
+                        out.push((r, c, span));
+                        scan_row = r;
+                        placed = true;
+                        break;
+                    }
                 }
-                _ => 1,
+                r += 1;
             }
-            .min(cols); // Never wider than the grid itself.
-
-            // Wrap to next row if the card won't fit.
-            if col > 0 && col + span > cols {
-                row += 1;
-                col = 0;
-            }
-
-            out.push((row, col, span));
-            col += span;
-
-            // End of row — advance.
-            if col >= cols {
-                row += 1;
-                col = 0;
+            if !placed {
+                // Fallback: sequential placement (shouldn't happen in practice).
+                let row = out.last().map(|(r, _, _)| *r).unwrap_or(0);
+                out.push((row, 0, span.min(cols)));
             }
         }
 
@@ -411,11 +431,16 @@ impl Dashboard {
             if total == 0 || cols == 0 {
                 return 1;
             }
-            Self::flow_placements(&self.entries, &self.stable_order[..total], cols)
-                .iter()
-                .map(|(r, _, _)| r + 1)
-                .max()
-                .unwrap_or(1)
+            Self::flow_placements(
+                &self.entries,
+                &self.stable_order[..total],
+                cols,
+                self.vertical_spanning,
+            )
+            .iter()
+            .map(|(r, _, _)| r + 1)
+            .max()
+            .unwrap_or(1)
         };
 
         let flow_rows = |cols: usize| flow_rows_for(cols, n);
@@ -432,7 +457,8 @@ impl Dashboard {
             let mut best = 1usize;
             for k in 1..=n.min(self.stable_order.len()) {
                 let slice = &self.stable_order[..k];
-                let placements = Self::flow_placements(&self.entries, slice, cols);
+                let placements =
+                    Self::flow_placements(&self.entries, slice, cols, self.vertical_spanning);
                 let nr = placements.iter().map(|(r, _, _)| r + 1).max().unwrap_or(0);
                 if nr > max_rows {
                     break;
@@ -472,7 +498,8 @@ impl Dashboard {
                     continue;
                 }
                 let ratio = (c as f64) / (r as f64);
-                let score = (ratio - aspect).abs();
+                // Slight penalty for more columns → prefers fewer, taller cards.
+                let score = (ratio - aspect).abs() * (1.0 + (c as f64 - 1.0) * 0.05);
                 if score < best_score {
                     best_score = score;
                     best_cols = c;
@@ -648,7 +675,12 @@ impl Dashboard {
         // Flow-based placement: MiniMax spans 2 columns, all others span 1.
         // This keeps card widths at a consistent unit_col_w so MiniMax is
         // always exactly twice as wide as its neighbours.
-        let placements = Self::flow_placements(&self.entries, &order[page_start..page_end], cols);
+        let placements = Self::flow_placements(
+            &self.entries,
+            &order[page_start..page_end],
+            cols,
+            self.vertical_spanning,
+        );
         let num_rows = placements
             .iter()
             .map(|(r, _, _)| *r + 1)
@@ -667,25 +699,37 @@ impl Dashboard {
             }
         }
 
-        // When natural heights overflow the grid, compress from the tallest rows
-        // downward (down to MIN_CARD_H) rather than scaling everything
-        // proportionally.  Preserving short rows means providers with few
-        // windows keep TwoLine mode (reset lines visible) while taller rows
-        // with many windows gracefully fall back to OneLine.
+        // When natural heights overflow the grid, distribute compression
+        // equally across all rows so heights stay uniform.  Each row loses
+        // the same amount (floor of remaining / shrinkable_count), with
+        // any remainder going to the tallest rows.
         let total_fixed: u16 = row_heights.iter().sum();
         if total_fixed > grid_area.height {
-            // Sort indices largest-first so we shave from the biggest rows.
-            let mut indices: Vec<usize> = (0..row_heights.len()).collect();
-            indices.sort_by(|&a, &b| row_heights[b].cmp(&row_heights[a]));
             let mut remaining = total_fixed.saturating_sub(grid_area.height);
-            for &idx in &indices {
-                if remaining == 0 {
+            while remaining > 0 {
+                let shrinkable: Vec<usize> = (0..row_heights.len())
+                    .filter(|&i| row_heights[i] > MIN_CARD_H)
+                    .collect();
+                if shrinkable.is_empty() {
                     break;
                 }
-                let can_shrink = row_heights[idx].saturating_sub(MIN_CARD_H);
-                let shrink = remaining.min(can_shrink);
-                row_heights[idx] -= shrink;
-                remaining -= shrink;
+                let per_row = (remaining / shrinkable.len() as u16).max(1);
+                let mut did_shrink = false;
+                for &idx in &shrinkable {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let can_shrink = row_heights[idx].saturating_sub(MIN_CARD_H);
+                    let take = per_row.min(can_shrink).min(remaining);
+                    if take > 0 {
+                        row_heights[idx] -= take;
+                        remaining -= take;
+                        did_shrink = true;
+                    }
+                }
+                if !did_shrink {
+                    break;
+                }
             }
         }
         let mut row_constraints: Vec<Constraint> =
@@ -859,17 +903,17 @@ impl Dashboard {
         let name_len = name_part.chars().count();
         let avail_for_fresh = (inner.width as usize).saturating_sub(name_len + 2);
 
-        let header_line = if is_auth || avail_for_fresh == 0 {
+        let mut header_spans: Vec<Span> = if is_auth || avail_for_fresh == 0 {
             // Auth-required or no space: just the name, slightly dimmed for auth.
             let style = if is_auth {
                 Style::new().bold().dim()
             } else {
                 Style::new().bold()
             };
-            Line::from(Span::styled(
+            vec![Span::styled(
                 bar::truncate_suffix(&name_part, inner.width as usize),
                 style,
-            ))
+            )]
         } else {
             // Freshness progress bar behind the label text.
             let freshness = if let Some(cached_at) = result.cached_at {
@@ -909,9 +953,20 @@ impl Dashboard {
             if !unfilled_str.is_empty() {
                 spans.push(Span::styled(unfilled_str, Style::new().fg(fg).dim()));
             }
-            Line::from(spans)
+            spans
         };
-        lines.push(header_line);
+
+        // Append inline pace icon to header when pace is non-neutral.
+        if let ProviderStatus::Available { quota } = &result.status {
+            if let Some(diff) = worst_pace_diff(&quota.windows) {
+                if let Some(icon) = pace_icon(diff) {
+                    header_spans.push(Span::raw(" "));
+                    header_spans.push(icon);
+                }
+            }
+        }
+
+        lines.push(Line::from(header_spans));
 
         // Plan / status line
         match &result.status {
@@ -1030,15 +1085,18 @@ impl Dashboard {
                             .italic(),
                     ));
                 } else if matches!(mode, RenderMode::TwoLine) {
-                    // All windows fit in TwoLine mode — there may be spare rows
-                    // (because row height = max across cards in the row). Use
-                    // one of them for a compact pacing badge.
-                    if let Some((badge_text, badge_style)) = pace_badge(&visible) {
-                        lines.push(Line::from(""));
-                        lines.push(Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled(badge_text, badge_style),
-                        ]));
+                    // Full text badge only when spare vertical space exists
+                    // (row height may exceed card's natural height).
+                    // The inline icon on the header always shows non-neutral pace.
+                    let spare = inner.height.saturating_sub(lines.len() as u16);
+                    if spare >= 2 {
+                        if let Some((badge_text, badge_style)) = pace_badge(&visible) {
+                            lines.push(Line::from(""));
+                            lines.push(Line::from(vec![
+                                Span::raw(" "),
+                                Span::styled(badge_text, badge_style),
+                            ]));
+                        }
                     }
                 }
             }
@@ -1293,6 +1351,43 @@ fn minimax_bar_cell(win: Option<&QuotaWindow>, bar_w: u16) -> Vec<Span<'static>>
     }
 }
 
+/// Worst pace diff (used% - elapsed%) across visible windows, or None if
+/// no window has time data.
+fn worst_pace_diff(windows: &[QuotaWindow]) -> Option<f64> {
+    let mut worst: f64 = f64::NEG_INFINITY;
+    for w in windows {
+        if bar::currency_window(&w.window_type).is_some() {
+            continue;
+        }
+        let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
+        let elapsed = bar::time_elapsed_fraction(w)?;
+        let diff = used_pct - elapsed;
+        if diff > worst {
+            worst = diff;
+        }
+    }
+    if worst == f64::NEG_INFINITY {
+        None
+    } else {
+        Some(worst)
+    }
+}
+
+/// Single-character pace icon for the header line.
+/// Returns None when pace is neutral (within +/-8% of elapsed time).
+fn pace_icon(diff: f64) -> Option<Span<'static>> {
+    if diff >= 0.08 {
+        Some(Span::styled(
+            "\u{26a1}",
+            Style::new().fg(Color::Rgb(255, 140, 0)),
+        ))
+    } else if diff <= -0.08 {
+        Some(Span::styled("\u{2713}", Style::new().green().dim()))
+    } else {
+        None
+    }
+}
+
 /// Returns a compact pacing summary badge for the bottom of a card when
 /// all windows are visible in TwoLine mode and spare rows exist.
 /// Returns None when the pace is neutral enough that a badge adds no signal.
@@ -1320,13 +1415,16 @@ fn pace_badge(visible: &[&QuotaWindow]) -> Option<(String, Style)> {
     }
     if worst_diff >= 0.08 {
         let text = format!(
-            "⚡ {}: {:.0}% — burning fast",
+            "\u{26a1} {}: {:.0}% \u{2014} burning fast",
             bar::truncate_suffix(&worst_label, 10),
             worst_pct * 100.0
         );
         Some((text, Style::new().fg(Color::Rgb(255, 140, 0))))
     } else if worst_diff <= -0.08 {
-        Some(("✓ all pacing ahead".to_string(), Style::new().green().dim()))
+        Some((
+            "\u{2713} all pacing ahead".to_string(),
+            Style::new().green().dim(),
+        ))
     } else {
         None // neutral — don't clutter the card
     }
