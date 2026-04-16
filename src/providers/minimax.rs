@@ -198,7 +198,7 @@ fn short_model_name(name: &str) -> String {
         None
     }
     .unwrap_or_else(|| s.to_string());
-    let s = if s.starts_with("Hailou-2.3-") {
+    let s = if s.starts_with("Hailuo-2.3-") {
         s.strip_prefix("Hailou-2.3-").map(|rest| format!("H2.3-{}", rest))
     } else {
         None
