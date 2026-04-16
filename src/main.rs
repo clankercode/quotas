@@ -474,7 +474,7 @@ fn spawn_fetches_for(
 
 fn run_snap(
     kinds: Vec<ProviderKind>,
-    _config: Config,
+    config: Config,
     width: u16,
     height: u16,
     output: Option<&str>,
@@ -507,9 +507,9 @@ fn run_snap(
 
     let mut dashboard = Dashboard::new_with_entries(kinds, entries);
 
-    // Apply config settings (hardcoded defaults for snap mode).
-    dashboard.show_all_windows = false;
-    dashboard.vertical_spanning = false;
+    // Apply config settings so snap respects the user's layout preferences.
+    dashboard.show_all_windows = config.ui.show_all_windows;
+    dashboard.vertical_spanning = config.ui.vertical_spanning;
 
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -536,7 +536,6 @@ fn run_snap(
         print!("{out}");
     }
 }
-
 fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

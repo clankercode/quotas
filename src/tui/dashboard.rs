@@ -413,7 +413,17 @@ impl Dashboard {
             if !placed {
                 // Fallback: sequential placement (shouldn't happen in practice).
                 let row = out.last().map(|(r, _, _)| *r).unwrap_or(0);
-                out.push((row, 0, span.min(cols)));
+                let final_span = span.min(cols);
+                for row_slice in occupied
+                    .iter_mut()
+                    .take((row + row_span).min(max_rows))
+                    .skip(row)
+                {
+                    for cell in row_slice.iter_mut().take(final_span.min(cols)) {
+                        *cell = true;
+                    }
+                }
+                out.push((row, 0, final_span));
             }
         }
 
@@ -707,12 +717,14 @@ impl Dashboard {
         if total_fixed > grid_area.height {
             let mut remaining = total_fixed.saturating_sub(grid_area.height);
             while remaining > 0 {
-                let shrinkable: Vec<usize> = (0..row_heights.len())
+                let mut shrinkable: Vec<usize> = (0..row_heights.len())
                     .filter(|&i| row_heights[i] > MIN_CARD_H)
                     .collect();
                 if shrinkable.is_empty() {
                     break;
                 }
+                // Tallest rows absorb any remainder first.
+                shrinkable.sort_by(|&a, &b| row_heights[b].cmp(&row_heights[a]));
                 let per_row = (remaining / shrinkable.len() as u16).max(1);
                 let mut did_shrink = false;
                 for &idx in &shrinkable {
@@ -1360,7 +1372,9 @@ fn worst_pace_diff(windows: &[QuotaWindow]) -> Option<f64> {
             continue;
         }
         let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
-        let elapsed = bar::time_elapsed_fraction(w)?;
+        let Some(elapsed) = bar::time_elapsed_fraction(w) else {
+            continue;
+        };
         let diff = used_pct - elapsed;
         if diff > worst {
             worst = diff;
@@ -1387,7 +1401,6 @@ fn pace_icon(diff: f64) -> Option<Span<'static>> {
         None
     }
 }
-
 /// Returns a compact pacing summary badge for the bottom of a card when
 /// all windows are visible in TwoLine mode and spare rows exist.
 /// Returns None when the pace is neutral enough that a badge adds no signal.
