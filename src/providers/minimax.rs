@@ -188,11 +188,23 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
 }
 
 fn short_model_name(name: &str) -> String {
-    // Strip common prefixes and length-limit for compact labels.
     let s = name
         .strip_prefix("MiniMax-")
         .or_else(|| name.strip_prefix("minimax-"))
         .unwrap_or(name);
+    let s = if s.starts_with("coding-plan-") {
+        s.strip_prefix("coding-plan-").map(|rest| format!("c-plan-{}", rest))
+    } else {
+        None
+    }
+    .unwrap_or_else(|| s.to_string());
+    let s = if s.starts_with("Hailou-2.3-") {
+        s.strip_prefix("Hailou-2.3-").map(|rest| format!("H2.3-{}", rest))
+    } else {
+        None
+    }
+    .unwrap_or(s);
+    let s = s.replace("lyrics_generation", "lyrics_gen");
     s.to_string()
 }
 
