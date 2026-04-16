@@ -148,21 +148,23 @@ fn push_rate_limit_windows(
 }
 
 fn short_codex_label(name: &str) -> String {
-    // Trim "GPT-5.3-" style prefixes and keep the distinguishing suffix
-    // short so it fits next to the duration label in a compact card.
     let trimmed = name
         .strip_prefix("GPT-5.3-")
         .or_else(|| name.strip_prefix("gpt-5.3-"))
         .unwrap_or(name);
     let lower = trimmed.to_ascii_lowercase();
-    // Use the final dashed segment as the label — e.g. "Codex-Spark" → "spark".
-    lower
+    let label: String = lower
         .rsplit('-')
         .next()
         .unwrap_or(&lower)
         .chars()
         .take(10)
-        .collect()
+        .collect();
+    if label == "spark" {
+        "spk".to_string()
+    } else {
+        label
+    }
 }
 
 pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {

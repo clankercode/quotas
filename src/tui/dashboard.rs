@@ -175,7 +175,7 @@ impl Dashboard {
     /// Navigate to the previous/next provider while in detail view, cycling
     /// through the visual order. Resets the scroll offset on each jump.
     pub fn detail_prev(&mut self) {
-        let order = self.visual_order();
+        let order = self.detail_navigable_order();
         if let Some(pos) = order.iter().position(|&i| i == self.selected_index) {
             if pos > 0 {
                 self.selected_index = order[pos - 1];
@@ -187,7 +187,7 @@ impl Dashboard {
     }
 
     pub fn detail_next(&mut self) {
-        let order = self.visual_order();
+        let order = self.detail_navigable_order();
         if let Some(pos) = order.iter().position(|&i| i == self.selected_index) {
             if pos + 1 < order.len() {
                 self.selected_index = order[pos + 1];
@@ -196,6 +196,13 @@ impl Dashboard {
             }
         }
         self.detail_scroll = 0;
+    }
+
+    fn detail_navigable_order(&self) -> Vec<usize> {
+        self.visual_order()
+            .into_iter()
+            .filter(|&i| self.is_entry_done(i))
+            .collect()
     }
 
     pub fn update(&mut self, idx: usize, result: ProviderResult) {

@@ -216,12 +216,12 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
     // because these are purely cosmetic improvements to the raw key.
     let renamed: &str = match window_type {
         "weekly" => "7d",
-        "weekly_sonnet" => "7d Sonnet",
+        "weekly_sonnet" => "7d Snt",
         "weekly_opus" => "7d Opus",
         "weekly_haiku" => "7d Haiku",
-        "monthly_mcp" => "month MCP",
+        "monthly_mcp" => "MCP",
         "monthly" => "month",
-        "extra_credits" => "credits",
+        "extra_credits" => "Creds",
         "payg_balance" => "PAYG",
         "balance_usd" | "balance_cny" => "balance",
         "paid_cny" => "paid",

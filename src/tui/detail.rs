@@ -16,7 +16,8 @@ impl DetailView {
 
     pub fn render(&self, width: u16) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
-        let bar_width: u16 = width.saturating_sub(16).clamp(10, 60);
+        let label_w: usize = (width as usize / 3).clamp(16, 50);
+        let bar_width: u16 = width.saturating_sub(label_w as u16 + 2).clamp(10, 60);
 
         // Header — freshness only when we have valid auth data.
         let show_freshness = !matches!(self.result.status, ProviderStatus::AuthRequired);
@@ -79,7 +80,7 @@ impl DetailView {
                             }
                             last_bucket = Some(bucket);
                         }
-                        render_window(&mut lines, window, bar_width, show_headers);
+                        render_window(&mut lines, window, bar_width, label_w, show_headers);
                         lines.push(Line::from(""));
                     }
                 }
@@ -146,13 +147,23 @@ impl DetailView {
     }
 }
 
-fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, show_headers: bool) {
+fn render_window(
+    lines: &mut Vec<Line<'_>>,
+    w: &QuotaWindow,
+    bar_width: u16,
+    label_w: usize,
+    show_headers: bool,
+) {
     let label_src = bar::display_label(&w.window_type, show_headers);
     // Special-case currency balance rows: no bar, just the formatted amount.
     if let Some((sym, scale)) = bar::currency_window(&w.window_type) {
         lines.push(Line::from(vec![
             Span::raw("  "),
-            Span::raw(format!("{:<14} ", bar::truncate_suffix(&label_src, 14))),
+            Span::raw(format!(
+                "{:<width$} ",
+                bar::truncate_suffix(&label_src, label_w),
+                width = label_w
+            )),
             Span::raw(format!("{}{:.2}", sym, w.remaining as f64 / scale)).bold(),
         ]));
         return;
@@ -168,7 +179,11 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, bar_width: u16, sho
     // Row 1: name + bar + % used
     let mut l1 = vec![
         Span::raw("  "),
-        Span::raw(format!("{:<14} ", bar::truncate_suffix(&label_src, 14))),
+        Span::raw(format!(
+            "{:<width$} ",
+            bar::truncate_suffix(&label_src, label_w),
+            width = label_w
+        )),
     ];
     l1.extend(bar_spans);
     l1.push(Span::raw(" "));
