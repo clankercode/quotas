@@ -81,4 +81,8 @@ User config: `~/.config/quotas/config.toml` (or `$XDG_CONFIG_HOME/quotas/config.
 [ui]
 show_all_windows = true     # reveal auto-hidden windows (e.g. billing_cycle)
 vertical_spanning = true    # experimental: MiniMax as 2x2 card
+
+[tui]
+auto_refresh = true         # periodic quota refresh while the TUI is open
+refresh_on_start = true     # fetch after the TUI loads, even with fresh cache
 ```

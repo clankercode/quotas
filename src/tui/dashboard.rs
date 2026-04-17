@@ -20,6 +20,8 @@ pub enum HitResult {
     Card(usize),
     /// The Refresh button was clicked.
     Refresh,
+    /// The auto-refresh checkbox was clicked.
+    AutoRefreshToggle,
     /// The Quit button was clicked.
     Quit,
 }
@@ -54,6 +56,7 @@ pub struct Dashboard {
     pub spinner_frame: usize,
     pub show_all_windows: bool,
     pub vertical_spanning: bool,
+    pub auto_refresh_enabled: bool,
     last_layout: Cell<GridLayout>,
     /// Cached visual order, locked in when all entries are loaded.
     /// Reset to identity order on first load; refreshes don't reshuffle.
@@ -63,6 +66,7 @@ pub struct Dashboard {
     /// (card_area, visual_pos) for each card rendered on the last frame.
     card_hit_areas: RefCell<Vec<(Rect, usize)>>,
     refresh_btn: Cell<Option<Rect>>,
+    auto_refresh_btn: Cell<Option<Rect>>,
     quit_btn: Cell<Option<Rect>>,
 }
 
@@ -79,11 +83,13 @@ impl Dashboard {
             spinner_frame: 0,
             show_all_windows: false,
             vertical_spanning: false,
+            auto_refresh_enabled: true,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
             card_hit_areas: RefCell::new(Vec::new()),
             refresh_btn: Cell::new(None),
+            auto_refresh_btn: Cell::new(None),
             quit_btn: Cell::new(None),
         }
     }
@@ -102,11 +108,13 @@ impl Dashboard {
             spinner_frame: 0,
             show_all_windows: false,
             vertical_spanning: false,
+            auto_refresh_enabled: true,
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
             card_hit_areas: RefCell::new(Vec::new()),
             refresh_btn: Cell::new(None),
+            auto_refresh_btn: Cell::new(None),
             quit_btn: Cell::new(None),
         };
         if all_done {
@@ -128,6 +136,9 @@ impl Dashboard {
         };
         if self.refresh_btn.get().is_some_and(in_rect) {
             return Some(HitResult::Refresh);
+        }
+        if self.auto_refresh_btn.get().is_some_and(in_rect) {
+            return Some(HitResult::AutoRefreshToggle);
         }
         if self.quit_btn.get().is_some_and(in_rect) {
             return Some(HitResult::Quit);
@@ -295,6 +306,24 @@ impl Dashboard {
         } else {
             self.selected_index / layout.per_page
         }
+    }
+
+    pub fn page_count(&self) -> usize {
+        let layout = self.last_layout.get();
+        if layout.per_page == 0 {
+            1
+        } else {
+            self.visible_count().max(1).div_ceil(layout.per_page)
+        }
+    }
+
+    pub fn select_page(&mut self, page: usize) {
+        let layout = self.last_layout.get();
+        if layout.per_page == 0 {
+            return;
+        }
+        let max_index = self.visible_count().saturating_sub(1);
+        self.selected_index = (page * layout.per_page).min(max_index);
     }
 
     pub fn navigate(&mut self, dir: Direction) {
@@ -628,13 +657,13 @@ impl Dashboard {
         }
 
         // Build the hint line with tracked button positions for mouse clicks/hover.
-        // Char offsets (prefix = 25, R Refresh = 9, middle = 26, Q Quit = 6):
-        //   " ←↑↓→ Nav  Enter Detail  " (25) + "R Refresh" + "  C Copy  PgUp/PgDn Page  " (26) + "Q Quit"
         let hint_y = title_area.y + 1;
         let mouse = self.mouse_pos.get();
         let refresh_rect = Rect::new(title_area.x + 25, hint_y, 9, 1);
-        let quit_rect = Rect::new(title_area.x + 60, hint_y, 6, 1);
+        let auto_refresh_rect = Rect::new(title_area.x + 60, hint_y, 8, 1);
+        let quit_rect = Rect::new(title_area.x + 70, hint_y, 6, 1);
         self.refresh_btn.set(Some(refresh_rect));
+        self.auto_refresh_btn.set(Some(auto_refresh_rect));
         self.quit_btn.set(Some(quit_rect));
 
         let in_rect = |r: Rect| -> bool {
@@ -652,6 +681,15 @@ impl Dashboard {
             Span::raw(" ←↑↓→ Nav  Enter Detail  ").dim(),
             Span::styled("R Refresh", btn_style(refresh_rect)),
             Span::raw("  C Copy  PgUp/PgDn Page  ").dim(),
+            Span::styled(
+                if self.auto_refresh_enabled {
+                    "[x] Auto"
+                } else {
+                    "[ ] Auto"
+                },
+                btn_style(auto_refresh_rect),
+            ),
+            Span::raw("  ").dim(),
             Span::styled("Q Quit", btn_style(quit_rect)),
             Span::raw("  · ").dim(),
             Span::raw("▒").fg(Color::DarkGray),
@@ -1526,6 +1564,25 @@ mod tests {
         }
     }
 
+    fn render_text(dashboard: &Dashboard, width: u16, height: u16) -> String {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| dashboard.render(f)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut lines = Vec::new();
+        for y in 0..height {
+            let mut line = String::new();
+            for x in 0..width {
+                line.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            lines.push(line.trim_end().to_string());
+        }
+        lines.join("\n")
+    }
+
     #[test]
     fn format_num_scales() {
         assert_eq!(format_num(500), "500");
@@ -1593,5 +1650,37 @@ mod tests {
         let dashboard = Dashboard::new_with_entries(kinds, entries);
         // Refreshing is NOT Done, so all_loaded() should be false (spinner shows).
         assert!(!dashboard.all_loaded());
+    }
+
+    #[test]
+    fn renders_auto_refresh_checkbox_state() {
+        let kinds = vec![ProviderKind::Claude];
+        let entries = vec![ProviderEntry::Done(dummy_available_result(
+            ProviderKind::Claude,
+        ))];
+        let mut dashboard = Dashboard::new_with_entries(kinds, entries);
+
+        let enabled = render_text(&dashboard, 100, 24);
+        assert!(enabled.contains("[x] Auto"));
+
+        dashboard.auto_refresh_enabled = false;
+        let disabled = render_text(&dashboard, 100, 24);
+        assert!(disabled.contains("[ ] Auto"));
+    }
+
+    #[test]
+    fn auto_refresh_checkbox_has_mouse_hit_result() {
+        let kinds = vec![ProviderKind::Claude];
+        let entries = vec![ProviderEntry::Done(dummy_available_result(
+            ProviderKind::Claude,
+        ))];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+
+        let _ = render_text(&dashboard, 100, 24);
+
+        assert!(matches!(
+            dashboard.hit_test(60, 1),
+            Some(HitResult::AutoRefreshToggle)
+        ));
     }
 }

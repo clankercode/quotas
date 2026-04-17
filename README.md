@@ -35,7 +35,16 @@ quotas
 ```
 
 Keybinds: `←↑↓→` navigate, `Enter` drill into a card, `R` refresh,
-`C` copy selected provider's JSON to clipboard, `Q` quit.
+`A` toggle auto-refresh, `C` copy selected provider's JSON to clipboard,
+`Q` quit.
+
+TUI refresh settings live in `~/.config/quotas/config.toml`:
+
+```toml
+[tui]
+auto_refresh = true       # periodic quota refresh while the TUI is open
+refresh_on_start = true   # fetch after the TUI loads, even with fresh cache
+```
 
 ### JSON output
 

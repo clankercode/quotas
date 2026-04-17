@@ -45,7 +45,24 @@ pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub statusline: StatusLine,
     pub staleness: StalenessConfig,
+    pub tui: TuiConfig,
     pub ui: Ui,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TuiConfig {
+    pub auto_refresh: bool,
+    pub refresh_on_start: bool,
+}
+
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            auto_refresh: true,
+            refresh_on_start: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -119,5 +136,20 @@ mod tests {
     fn parses_empty_file_uses_defaults() {
         let c: Config = toml::from_str("").unwrap();
         assert!(c.auto_refresh.enabled);
+    }
+
+    #[test]
+    fn default_enables_tui_refresh_controls() {
+        let c = Config::default();
+        assert!(c.tui.auto_refresh);
+        assert!(c.tui.refresh_on_start);
+    }
+
+    #[test]
+    fn parses_disable_tui_refresh_controls() {
+        let toml_str = "[tui]\nauto_refresh = false\nrefresh_on_start = false\n";
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert!(!c.tui.auto_refresh);
+        assert!(!c.tui.refresh_on_start);
     }
 }

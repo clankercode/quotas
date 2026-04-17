@@ -6,12 +6,12 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use quotas::auth::cursor::CursorAuthResolver;
 use quotas::auth::env::EnvResolver;
 use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::refresh;
-use quotas::auth::cursor::CursorAuthResolver;
 use quotas::auth::{AuthResolver, MultiResolver};
 use quotas::cache;
 use quotas::config::Config;
@@ -25,6 +25,7 @@ use quotas::tui::ProviderEntry;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
@@ -184,9 +185,7 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
-        ProviderKind::Cursor => {
-            Box::new(CursorAuthResolver::new())
-        }
+        ProviderKind::Cursor => Box::new(CursorAuthResolver::new()),
         ProviderKind::DeepSeek => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(EnvResolver::new(vec![("DEEPSEEK_API_KEY", "deepseek")])),
@@ -405,6 +404,18 @@ fn auto_refresh_interval(kind: ProviderKind) -> Duration {
     }
 }
 
+fn should_startup_fetch(cached: bool, refresh_on_start: bool, has_creds: bool) -> bool {
+    !cached && refresh_on_start && has_creds
+}
+
+fn should_periodic_refresh(cached: bool, auto_refresh_enabled: bool) -> bool {
+    !cached && auto_refresh_enabled
+}
+
+fn should_backdate_refresh_timer(refresh_on_start: bool, startup_fetching: bool) -> bool {
+    refresh_on_start && !startup_fetching
+}
+
 fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
     let results: Vec<ProviderResult> = kinds
         .into_iter()
@@ -416,10 +427,7 @@ fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
 
 /// Fetch with cache-first semantics: return cached data if fresh, otherwise
 /// fetch fresh data and update the cache. Uses per-provider staleness thresholds.
-fn fetch_with_staleness_check(
-    kinds: Vec<ProviderKind>,
-    config: &Config,
-) -> Vec<ProviderResult> {
+fn fetch_with_staleness_check(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
     let cache = cache::read_cache();
     let now = chrono::Utc::now();
     let mut results = Vec::with_capacity(kinds.len());
@@ -472,6 +480,42 @@ fn spawn_fetches_for(
     }
 }
 
+fn render_dashboard_text(dashboard: &Dashboard, width: u16, height: u16) -> String {
+    use ratatui::backend::TestBackend;
+
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| dashboard.render(f)).unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let mut lines = Vec::new();
+    for y in 0..height {
+        let mut line = String::new();
+        for x in 0..width {
+            line.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+        }
+        lines.push(line.trim_end().to_string());
+    }
+    lines.join("\n") + "\n"
+}
+
+fn snap_page_output_path(path: &str, page_number: usize) -> PathBuf {
+    let original = PathBuf::from(path);
+    let suffix = format!("page{page_number}");
+    match (original.file_stem(), original.extension()) {
+        (Some(stem), Some(ext)) => original.with_file_name(format!(
+            "{}-{}.{}",
+            stem.to_string_lossy(),
+            suffix,
+            ext.to_string_lossy()
+        )),
+        (Some(stem), None) => {
+            original.with_file_name(format!("{}-{}", stem.to_string_lossy(), suffix))
+        }
+        _ => PathBuf::from(format!("{path}-{suffix}")),
+    }
+}
+
 fn run_snap(
     kinds: Vec<ProviderKind>,
     config: Config,
@@ -479,8 +523,6 @@ fn run_snap(
     height: u16,
     output: Option<&str>,
 ) {
-    use ratatui::backend::TestBackend;
-
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
 
@@ -510,30 +552,32 @@ fn run_snap(
     // Apply config settings so snap respects the user's layout preferences.
     dashboard.show_all_windows = config.ui.show_all_windows;
     dashboard.vertical_spanning = config.ui.vertical_spanning;
+    dashboard.auto_refresh_enabled = config.tui.auto_refresh;
 
-    let backend = TestBackend::new(width, height);
-    let mut terminal = Terminal::new(backend).unwrap();
-    terminal.draw(|f| dashboard.render(f)).unwrap();
-
-    let buffer = terminal.backend().buffer().clone();
-    let mut lines = Vec::new();
-    for y in 0..height {
-        let mut line = String::new();
-        for x in 0..width {
-            line.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
-        }
-        lines.push(line.trim_end().to_string());
-    }
-    let out = lines.join("\n") + "\n";
-
+    let out = render_dashboard_text(&dashboard, width, height);
+    let pages = dashboard.page_count();
     if let Some(path) = output {
         if let Err(e) = std::fs::write(path, &out) {
             eprintln!("Error writing to {path}: {e}");
             std::process::exit(1);
         }
         eprintln!("Wrote {path}");
+        for page in 1..pages {
+            dashboard.select_page(page);
+            let page_out = render_dashboard_text(&dashboard, width, height);
+            let page_path = snap_page_output_path(path, page + 1);
+            if let Err(e) = std::fs::write(&page_path, &page_out) {
+                eprintln!("Error writing {}: {e}", page_path.display());
+                std::process::exit(1);
+            }
+            eprintln!("Wrote {}", page_path.display());
+        }
     } else {
         print!("{out}");
+        for page in 1..pages {
+            dashboard.select_page(page);
+            print!("{}", render_dashboard_text(&dashboard, width, height));
+        }
     }
 }
 fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
@@ -546,10 +590,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     // Read cache and build auth resolvers for credential pre-checking.
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
-    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
-        .iter()
-        .map(|k| build_auth_resolver(k))
-        .collect();
+    let auth_resolvers: Vec<Box<dyn AuthResolver>> =
+        kinds.iter().map(|k| build_auth_resolver(k)).collect();
 
     // Build initial entries: prefer cached data when fresh, skip fetches for
     // providers without credentials, only spawn fetches where needed.
@@ -559,6 +601,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     for (idx, kind) in kinds.iter().enumerate() {
         let key = kind.slug().to_string();
         let has_creds = auth_resolvers[idx].have_credentials();
+        let fetch_on_start = should_startup_fetch(cached, config.tui.refresh_on_start, has_creds);
 
         if cached {
             // --cached: only show cache, never fetch.
@@ -585,29 +628,36 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         }
 
         if let Some(entry) = disk_cache.entries.get(&key) {
-            let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
-            let threshold = config.staleness.staleness_threshold(&key);
-            if age_secs < threshold {
-                // Fresh cache — show immediately, no fetch needed.
-                let mut result = entry.result.clone();
-                result.cached_at = Some(entry.cached_at);
-                initial_entries.push(ProviderEntry::Done(result));
-                continue;
-            }
-            // Stale cache — show old data while refreshing in background.
+            // Show cached data immediately. By default the TUI still fetches
+            // fresh data after load, even when cache is within staleness.
             let mut result = entry.result.clone();
             result.cached_at = Some(entry.cached_at);
-            if has_creds {
+            if fetch_on_start {
                 initial_entries.push(ProviderEntry::Refreshing(result));
                 fetch_indices.push(idx);
             } else {
-                // No credentials to refresh — just show the stale cached data.
                 initial_entries.push(ProviderEntry::Done(result));
             }
         } else if has_creds {
-            // No cache but credentials exist — show loading spinner.
-            initial_entries.push(ProviderEntry::Loading);
-            fetch_indices.push(idx);
+            if fetch_on_start {
+                // No cache but credentials exist — show loading spinner.
+                initial_entries.push(ProviderEntry::Loading);
+                fetch_indices.push(idx);
+            } else {
+                initial_entries.push(ProviderEntry::Done(ProviderResult {
+                    kind: *kind,
+                    status: quotas::providers::ProviderStatus::Unavailable {
+                        info: quotas::providers::UnavailableInfo {
+                            reason: "No cached data; startup refresh disabled".into(),
+                            console_url: None,
+                        },
+                    },
+                    fetched_at: now,
+                    raw_response: None,
+                    auth_source: None,
+                    cached_at: None,
+                }));
+            }
         } else {
             // No cache, no credentials — show auth required.
             initial_entries.push(ProviderEntry::Done(auth_required_result(
@@ -620,6 +670,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
     dashboard.show_all_windows = config.ui.show_all_windows;
     dashboard.vertical_spanning = config.ui.vertical_spanning;
+    dashboard.auto_refresh_enabled = config.tui.auto_refresh;
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -641,13 +692,20 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         .map(|(idx, _)| {
             if fetch_indices.contains(&idx) {
                 Instant::now()
-            } else if let Some(entry) =
-                disk_cache.entries.get(kinds[idx].slug())
-            {
-                let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
-                let elapsed = Duration::from_secs(age_secs);
-                // Back-date so the next auto-refresh fires after the normal interval.
-                Instant::now().checked_sub(elapsed).unwrap_or(Instant::now())
+            } else if should_backdate_refresh_timer(
+                config.tui.refresh_on_start,
+                fetch_indices.contains(&idx),
+            ) {
+                if let Some(entry) = disk_cache.entries.get(kinds[idx].slug()) {
+                    let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
+                    let elapsed = Duration::from_secs(age_secs);
+                    // Back-date so the next auto-refresh fires after the normal interval.
+                    Instant::now()
+                        .checked_sub(elapsed)
+                        .unwrap_or(Instant::now())
+                } else {
+                    Instant::now()
+                }
             } else {
                 Instant::now()
             }
@@ -667,7 +725,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
         // Skip providers without credentials.
-        if !cached {
+        if should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
             for (idx, kind) in kinds.iter().cloned().enumerate() {
                 if !auth_resolvers[idx].have_credentials() {
                     continue;
@@ -728,6 +786,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                     last_refresh[idx] = Instant::now();
                                 }
                             }
+                            Some(HitResult::AutoRefreshToggle) => {
+                                dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
+                            }
                             Some(HitResult::Quit) => return Ok(()),
                             Some(HitResult::Card(vpos)) => {
                                 if dashboard.selected_index == vpos && !dashboard.show_detail {
@@ -767,13 +828,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         for &idx in &fetchable {
                             dashboard.reset_one(idx);
                         }
-                        spawn_fetches_for(
-                            &rt,
-                            &kinds,
-                            &fetchable,
-                            config.clone(),
-                            cur_tx.clone(),
-                        );
+                        spawn_fetches_for(&rt, &kinds, &fetchable, config.clone(), cur_tx.clone());
                         for &idx in &fetchable {
                             last_refresh[idx] = Instant::now();
                         }
@@ -786,6 +841,9 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 }
                             }
                         }
+                    }
+                    KeyCode::Char('a') | KeyCode::Char('A') => {
+                        dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
                     }
                     KeyCode::Enter => {
                         if dashboard.show_detail {
@@ -913,7 +971,10 @@ fn main() {
             fetch_all(kinds, &config)
         };
         let cache = cache::read_cache();
-        println!("{}", JsonOutput::from_results(results, &cache).to_json(args.pretty));
+        println!(
+            "{}",
+            JsonOutput::from_results(results, &cache).to_json(args.pretty)
+        );
         return;
     }
 
@@ -923,7 +984,13 @@ fn main() {
     }
 
     if args.snap {
-        run_snap(kinds, config, args.snap_width, args.snap_height, args.snap_output.as_deref());
+        run_snap(
+            kinds,
+            config,
+            args.snap_width,
+            args.snap_height,
+            args.snap_output.as_deref(),
+        );
         return;
     }
 
@@ -1011,5 +1078,51 @@ mod tests {
     #[test]
     fn parse_key_file_empty_returns_none() {
         assert_eq!(parse_key_file(""), None);
+    }
+
+    #[test]
+    fn startup_fetch_runs_by_default_when_credentials_exist() {
+        assert!(should_startup_fetch(false, true, true));
+    }
+
+    #[test]
+    fn startup_fetch_stops_when_disabled() {
+        assert!(!should_startup_fetch(false, false, true));
+    }
+
+    #[test]
+    fn startup_fetch_stops_in_cached_mode() {
+        assert!(!should_startup_fetch(true, true, true));
+    }
+
+    #[test]
+    fn startup_fetch_requires_credentials() {
+        assert!(!should_startup_fetch(false, true, false));
+    }
+
+    #[test]
+    fn periodic_refresh_follows_tui_toggle() {
+        assert!(should_periodic_refresh(false, true));
+        assert!(!should_periodic_refresh(false, false));
+        assert!(!should_periodic_refresh(true, true));
+    }
+
+    #[test]
+    fn refresh_timer_backdates_only_when_startup_refresh_is_allowed() {
+        assert!(should_backdate_refresh_timer(true, false));
+        assert!(!should_backdate_refresh_timer(false, false));
+        assert!(!should_backdate_refresh_timer(true, true));
+    }
+
+    #[test]
+    fn snap_page_output_path_inserts_page_before_extension() {
+        let path = snap_page_output_path("screenshots/snap.txt", 2);
+        assert_eq!(path.to_string_lossy(), "screenshots/snap-page2.txt");
+    }
+
+    #[test]
+    fn snap_page_output_path_handles_no_extension() {
+        let path = snap_page_output_path("screenshots/snap", 3);
+        assert_eq!(path.to_string_lossy(), "screenshots/snap-page3");
     }
 }
