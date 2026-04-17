@@ -355,6 +355,61 @@ fn humanize_duration(d: chrono::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{ProviderKind, ProviderQuota, QuotaWindow};
+
+    fn render_detail_text(result: ProviderResult, width: u16, height: u16) -> String {
+        use ratatui::backend::TestBackend;
+        use ratatui::widgets::Paragraph;
+        use ratatui::Terminal;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let view = DetailView::new(result);
+        terminal
+            .draw(|f| {
+                let text = view.render(width);
+                f.render_widget(Paragraph::new(text), f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let mut lines = Vec::new();
+        for y in 0..height {
+            let mut line = String::new();
+            for x in 0..width {
+                line.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            lines.push(line.trim_end().to_string());
+        }
+        lines.join("\n")
+    }
+
+    fn gemini_fraction_quota_result() -> ProviderResult {
+        ProviderResult {
+            kind: ProviderKind::Gemini,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Gemini API".into(),
+                    windows: vec![QuotaWindow {
+                        window_type: "REQUESTS_gemini-2.5-flash".into(),
+                        used: 4,
+                        limit: 100,
+                        remaining: 96,
+                        reset_at: Some(
+                            chrono::DateTime::parse_from_rfc3339("2026-04-18T04:00:00Z")
+                                .unwrap()
+                                .with_timezone(&chrono::Utc),
+                        ),
+                        period_seconds: None,
+                    }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: Some("oauth:/home/xertrov/.gemini/oauth_creds.json".into()),
+            cached_at: None,
+        }
+    }
 
     #[test]
     fn fmt_exact_groups_thousands() {
@@ -377,5 +432,17 @@ mod tests {
             humanize_duration(chrono::Duration::seconds(86400 * 3 + 3600)),
             "3d 1h"
         );
+    }
+
+    #[test]
+    fn renders_gemini_fraction_quota_with_exact_counts() {
+        let out = render_detail_text(gemini_fraction_quota_result(), 100, 18);
+
+        assert!(out.contains("Gemini API"));
+        assert!(out.contains("4% used"));
+        assert!(out.contains("4 used"));
+        assert!(out.contains("96 left"));
+        assert!(out.contains("100 cap"));
+        assert!(out.contains("resets in"));
     }
 }

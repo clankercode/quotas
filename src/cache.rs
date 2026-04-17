@@ -1,4 +1,4 @@
-use crate::providers::{ProviderResult, ProviderStatus};
+use crate::providers::{ProviderKind, ProviderResult, ProviderStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -34,7 +34,27 @@ pub fn read_cache() -> CacheFile {
     let Ok(content) = std::fs::read_to_string(&path) else {
         return CacheFile::default();
     };
-    serde_json::from_str(&content).unwrap_or_default()
+    let mut cache: CacheFile = serde_json::from_str(&content).unwrap_or_default();
+    rehydrate_cached_results(&mut cache);
+    cache
+}
+
+fn rehydrate_cached_results(cache: &mut CacheFile) {
+    for entry in cache.entries.values_mut() {
+        if entry.result.kind == ProviderKind::Gemini {
+            rehydrate_gemini_result(&mut entry.result);
+        }
+    }
+}
+
+fn rehydrate_gemini_result(result: &mut ProviderResult) {
+    let Some(raw) = &result.raw_response else {
+        return;
+    };
+    let Ok(quota) = crate::providers::gemini::parse_quota(raw) else {
+        return;
+    };
+    result.status = ProviderStatus::Available { quota };
 }
 
 /// Merge a batch of results into the cache. Each provider entry is updated
@@ -102,7 +122,10 @@ fn status_priority(status: &ProviderStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::{ProviderQuota, ProviderStatus};
+    use crate::providers::{ProviderKind, ProviderQuota, ProviderStatus};
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn priority_ordering() {
@@ -126,5 +149,64 @@ mod tests {
         assert!(avail > unavail);
         assert!(unavail > auth);
         assert!(auth > net);
+    }
+
+    #[test]
+    fn read_cache_rehydrates_gemini_fraction_only_raw_response() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_xdg = std::env::var_os("XDG_CACHE_HOME");
+        let cache_root =
+            std::env::temp_dir().join(format!("quotas-cache-test-{}", std::process::id()));
+        let cache_dir = cache_root.join("quotas");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let cached_at = Utc::now();
+        let result = ProviderResult {
+            kind: ProviderKind::Gemini,
+            status: ProviderStatus::Unavailable {
+                info: crate::providers::UnavailableInfo {
+                    reason: "stale".into(),
+                    console_url: None,
+                },
+            },
+            fetched_at: cached_at,
+            raw_response: Some(serde_json::json!({
+                "buckets": [
+                    {
+                        "remainingFraction": 0.96,
+                        "resetTime": "2026-04-18T04:00:00Z",
+                        "modelId": "gemini-2.5-flash",
+                        "tokenType": "REQUESTS"
+                    }
+                ]
+            })),
+            auth_source: None,
+            cached_at: None,
+        };
+        let mut file = CacheFile::default();
+        file.entries
+            .insert("gemini".into(), CacheEntry { result, cached_at });
+        std::fs::write(
+            cache_dir.join("cache.json"),
+            serde_json::to_string(&file).unwrap(),
+        )
+        .unwrap();
+
+        std::env::set_var("XDG_CACHE_HOME", &cache_root);
+        let cache = read_cache();
+        if let Some(value) = previous_xdg {
+            std::env::set_var("XDG_CACHE_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+        let _ = std::fs::remove_dir_all(cache_root);
+
+        let gemini = cache.entries.get("gemini").unwrap();
+        let ProviderStatus::Available { quota } = &gemini.result.status else {
+            panic!("expected available Gemini quota");
+        };
+        assert_eq!(quota.windows[0].limit, 100);
+        assert_eq!(quota.windows[0].remaining, 96);
+        assert_eq!(quota.windows[0].used, 4);
     }
 }

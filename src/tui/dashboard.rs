@@ -1564,6 +1564,34 @@ mod tests {
         }
     }
 
+    fn gemini_fraction_quota_result() -> ProviderResult {
+        ProviderResult {
+            kind: ProviderKind::Gemini,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Gemini API".into(),
+                    windows: vec![QuotaWindow {
+                        window_type: "REQUESTS_gemini-2.5-flash".into(),
+                        used: 4,
+                        limit: 100,
+                        remaining: 96,
+                        reset_at: Some(
+                            chrono::DateTime::parse_from_rfc3339("2026-04-18T04:00:00Z")
+                                .unwrap()
+                                .with_timezone(&chrono::Utc),
+                        ),
+                        period_seconds: None,
+                    }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: Some("oauth:/home/xertrov/.gemini/oauth_creds.json".into()),
+            cached_at: None,
+        }
+    }
+
     fn render_text(dashboard: &Dashboard, width: u16, height: u16) -> String {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
@@ -1682,5 +1710,19 @@ mod tests {
             dashboard.hit_test(60, 1),
             Some(HitResult::AutoRefreshToggle)
         ));
+    }
+
+    #[test]
+    fn renders_gemini_fraction_quota_on_card() {
+        let kinds = vec![ProviderKind::Gemini];
+        let entries = vec![ProviderEntry::Done(gemini_fraction_quota_result())];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+
+        let out = render_text(&dashboard, 80, 20);
+
+        assert!(out.contains("Gemini API"));
+        assert!(out.contains("4%"));
+        assert!(out.contains("4/100"));
+        assert!(out.contains("2.5-flash") || out.contains("flash"));
     }
 }
