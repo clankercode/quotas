@@ -44,6 +44,10 @@ TUI refresh settings live in `~/.config/quotas/config.toml`:
 [tui]
 auto_refresh = true       # periodic quota refresh while the TUI is open
 refresh_on_start = true   # fetch after the TUI loads, even with fresh cache
+
+[providers]
+enabled = ["*"]    # wildcard = all providers; specific list = whitelist
+disabled = []     # exclude from enabled set
 ```
 
 ### JSON output
