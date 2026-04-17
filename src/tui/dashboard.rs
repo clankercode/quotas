@@ -330,12 +330,16 @@ impl Dashboard {
     }
 
     pub fn selected_provider(&self) -> Option<&ProviderResult> {
-        let order = self.visual_order();
-        let entry_idx = *order.get(self.selected_index)?;
+        let entry_idx = self.selected_entry_index()?;
         match self.entries.get(entry_idx)? {
             ProviderEntry::Done(r) | ProviderEntry::Refreshing(r) => Some(r),
             ProviderEntry::Loading => None,
         }
+    }
+
+    pub fn selected_entry_index(&self) -> Option<usize> {
+        let order = self.visual_order();
+        order.get(self.selected_index).copied()
     }
 
     /// Returns the cached visual order (frozen when all entries last loaded).

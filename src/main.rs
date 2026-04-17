@@ -464,6 +464,38 @@ fn should_periodic_refresh(cached: bool, auto_refresh_enabled: bool) -> bool {
     !cached && auto_refresh_enabled
 }
 
+fn periodic_refresh_candidates(
+    cached: bool,
+    auto_refresh_enabled: bool,
+    show_detail: bool,
+    selected_entry: Option<usize>,
+    kinds: &[ProviderKind],
+    auth_ready: &[bool],
+    entry_done: &[bool],
+    elapsed: &[Duration],
+) -> Vec<usize> {
+    if !should_periodic_refresh(cached, auto_refresh_enabled) {
+        return Vec::new();
+    }
+
+    let indices: Vec<usize> = if show_detail {
+        selected_entry.into_iter().collect()
+    } else {
+        (0..kinds.len()).collect()
+    };
+
+    indices
+        .into_iter()
+        .filter(|&idx| auth_ready.get(idx).copied().unwrap_or(false))
+        .filter(|&idx| entry_done.get(idx).copied().unwrap_or(false))
+        .filter(|&idx| {
+            elapsed
+                .get(idx)
+                .is_some_and(|elapsed| *elapsed >= auto_refresh_interval(kinds[idx]))
+        })
+        .collect()
+}
+
 fn should_backdate_refresh_timer(refresh_on_start: bool, startup_fetching: bool) -> bool {
     refresh_on_start && !startup_fetching
 }
@@ -654,6 +686,10 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     let now = chrono::Utc::now();
     let auth_resolvers: Vec<Box<dyn AuthResolver>> =
         kinds.iter().map(|k| build_auth_resolver(k, &config)).collect();
+    let auth_ready: Vec<bool> = auth_resolvers
+        .iter()
+        .map(|resolver| resolver.have_credentials())
+        .collect();
 
     // Build initial entries: prefer cached data when fresh, skip fetches for
     // providers without credentials, only spawn fetches where needed.
@@ -797,22 +833,28 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         // Claude uses a longer interval to avoid rate-limiting.
         // Skip providers without credentials.
         if should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
-            for (idx, kind) in kinds.iter().cloned().enumerate() {
-                if !auth_resolvers[idx].have_credentials() {
-                    continue;
-                }
-                if dashboard.is_entry_done(idx)
-                    && last_refresh[idx].elapsed() >= auto_refresh_interval(kind)
-                {
-                    dashboard.reset_one(idx);
-                    let tx2 = cur_tx.clone();
-                    let config2 = config.clone();
-                    rt.spawn(async move {
-                        let result = fetch_one(kind, &config2).await;
-                        let _ = tx2.send((idx, result));
-                    });
-                    last_refresh[idx] = Instant::now();
-                }
+            let elapsed: Vec<Duration> = last_refresh.iter().map(|instant| instant.elapsed()).collect();
+            let entry_done: Vec<bool> = (0..kinds.len()).map(|idx| dashboard.is_entry_done(idx)).collect();
+            let targets = periodic_refresh_candidates(
+                cached,
+                dashboard.auto_refresh_enabled,
+                dashboard.show_detail,
+                dashboard.selected_entry_index(),
+                &kinds,
+                &auth_ready,
+                &entry_done,
+                &elapsed,
+            );
+            for idx in targets {
+                let kind = kinds[idx];
+                dashboard.reset_one(idx);
+                let tx2 = cur_tx.clone();
+                let config2 = config.clone();
+                rt.spawn(async move {
+                    let result = fetch_one(kind, &config2).await;
+                    let _ = tx2.send((idx, result));
+                });
+                last_refresh[idx] = Instant::now();
             }
         }
 
@@ -841,7 +883,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 cur_tx = new_tx;
                                 // Only fetch providers that have credentials.
                                 let fetchable: Vec<usize> = (0..kinds.len())
-                                    .filter(|&i| auth_resolvers[i].have_credentials())
+                                    .filter(|&i| auth_ready[i])
                                     .collect();
                                 for &idx in &fetchable {
                                     dashboard.reset_one(idx);
@@ -891,7 +933,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         cur_tx = new_tx;
                         // Only fetch providers that have credentials.
                         let fetchable: Vec<usize> = (0..kinds.len())
-                            .filter(|&i| auth_resolvers[i].have_credentials())
+                            .filter(|&i| auth_ready[i])
                             .collect();
                         for &idx in &fetchable {
                             dashboard.reset_one(idx);
@@ -1207,6 +1249,56 @@ mod tests {
         assert!(should_periodic_refresh(false, true));
         assert!(!should_periodic_refresh(false, false));
         assert!(!should_periodic_refresh(true, true));
+    }
+
+    #[test]
+    fn periodic_refresh_targets_only_selected_provider_in_detail_view() {
+        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let auth_ready = vec![true, true, true];
+        let entry_done = vec![true, true, true];
+        let elapsed = vec![
+            Duration::from_secs(601),
+            Duration::from_secs(301),
+            Duration::from_secs(301),
+        ];
+
+        let targets = periodic_refresh_candidates(
+            false,
+            true,
+            true,
+            Some(1),
+            &kinds,
+            &auth_ready,
+            &entry_done,
+            &elapsed,
+        );
+
+        assert_eq!(targets, vec![1]);
+    }
+
+    #[test]
+    fn periodic_refresh_targets_all_due_providers_on_dashboard() {
+        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let auth_ready = vec![true, true, false];
+        let entry_done = vec![true, true, true];
+        let elapsed = vec![
+            Duration::from_secs(601),
+            Duration::from_secs(301),
+            Duration::from_secs(301),
+        ];
+
+        let targets = periodic_refresh_candidates(
+            false,
+            true,
+            false,
+            Some(1),
+            &kinds,
+            &auth_ready,
+            &entry_done,
+            &elapsed,
+        );
+
+        assert_eq!(targets, vec![0, 1]);
     }
 
     #[test]
