@@ -3,6 +3,7 @@ pub mod codex;
 pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
+pub mod github_copilot;
 pub mod kimi;
 pub mod mimo;
 pub mod minimax;
@@ -23,6 +24,7 @@ pub enum ProviderKind {
     Cursor,
     DeepSeek,
     Gemini,
+    GitHubCopilot,
     Kimi,
     Mimo,
     Minimax,
@@ -37,6 +39,7 @@ impl ProviderKind {
     pub fn auto_refresh_secs(&self) -> u64 {
         match self {
             ProviderKind::Claude => 600,
+            ProviderKind::GitHubCopilot => 600,
             _ => 300,
         }
     }
@@ -48,6 +51,7 @@ impl ProviderKind {
             ProviderKind::Cursor => "Cursor",
             ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::Gemini => "Gemini",
+            ProviderKind::GitHubCopilot => "Copilot",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::Mimo => "MiMo",
             ProviderKind::Minimax => "MiniMax",
@@ -64,6 +68,7 @@ impl ProviderKind {
             ProviderKind::Cursor => "cursor",
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Gemini => "gemini",
+            ProviderKind::GitHubCopilot => "github-copilot",
             ProviderKind::Kimi => "kimi",
             ProviderKind::Mimo => "mimo",
             ProviderKind::Minimax => "minimax",
@@ -80,6 +85,7 @@ impl ProviderKind {
             ProviderKind::Cursor,
             ProviderKind::DeepSeek,
             ProviderKind::Gemini,
+            ProviderKind::GitHubCopilot,
             ProviderKind::Kimi,
             ProviderKind::Minimax,
             ProviderKind::OpenRouter,

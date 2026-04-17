@@ -42,6 +42,12 @@ pub struct Ui {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
+pub struct GitHubCopilotConfig {
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub statusline: StatusLine,
@@ -49,6 +55,7 @@ pub struct Config {
     pub providers: Providers,
     pub tui: TuiConfig,
     pub ui: Ui,
+    pub github_copilot: GitHubCopilotConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]

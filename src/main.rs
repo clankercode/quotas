@@ -12,7 +12,7 @@ use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
 use quotas::auth::refresh;
-use quotas::auth::{AuthResolver, MultiResolver};
+use quotas::auth::{AuthResolver, MultiResolver, StaticResolver};
 use quotas::cache;
 use quotas::config::Config;
 use quotas::output::json::JsonOutput;
@@ -121,7 +121,7 @@ fn parse_key_file(content: &str) -> Option<String> {
     None
 }
 
-fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
+fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthResolver> {
     match kind {
         ProviderKind::Minimax => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
@@ -234,6 +234,22 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
             ];
             Box::new(MultiResolver::new(resolvers))
         }
+        ProviderKind::GitHubCopilot => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = vec![
+                Box::new(OpencodeAuthResolver::new(OpencodeSlot::GitHubCopilot)),
+                Box::new(EnvResolver::new(vec![(
+                    "GITHUB_COPILOT_TOKEN",
+                    "github_copilot",
+                )])),
+            ];
+            if let Some(token) = config.github_copilot.token.clone() {
+                resolvers.push(Box::new(StaticResolver {
+                    token,
+                    source: "config:github_copilot.token".into(),
+                }));
+            }
+            Box::new(MultiResolver::new(resolvers))
+        }
         ProviderKind::Mimo => {
             let resolvers: Vec<Box<dyn AuthResolver>> = vec![
                 Box::new(CookieFileResolver::new(
@@ -280,7 +296,7 @@ fn filter_kinds(requested: &[String], config: &Config, cached: bool) -> Vec<Prov
             let cache = cache::read_cache();
             return requested_kinds
                 .into_iter()
-                .filter(|k| cache.entries.contains_key(&k.slug().to_string()))
+                .filter(|k| cache.entries.contains_key(k.slug()))
                 .collect();
         }
         return requested_kinds;
@@ -313,6 +329,9 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
         "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
         "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
+        "copilot" | "github-copilot" | "github_copilot" | "githubcopilot" => {
+            Some(ProviderKind::GitHubCopilot)
+        }
         _ => None,
     }
 }
@@ -350,7 +369,7 @@ async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
 
 async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
     maybe_refresh_creds(kind, config).await;
-    let auth = build_auth_resolver(&kind);
+    let auth = build_auth_resolver(&kind, config);
     let provider: Box<dyn Provider> = match kind {
         ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
         ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
@@ -373,6 +392,9 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
         ProviderKind::Mimo => Box::new(quotas::providers::mimo::MimoProvider::new(auth)),
+        ProviderKind::GitHubCopilot => Box::new(
+            quotas::providers::github_copilot::GitHubCopilotProvider::new(auth),
+        ),
     };
     // Pre-resolve to capture the auth source string for the detail view.
     // This is a lightweight re-resolve (env var / file read) after any token
@@ -620,7 +642,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
     let auth_resolvers: Vec<Box<dyn AuthResolver>> =
-        kinds.iter().map(|k| build_auth_resolver(k)).collect();
+        kinds.iter().map(|k| build_auth_resolver(k, &config)).collect();
 
     // Build initial entries: prefer cached data when fresh, skip fetches for
     // providers without credentials, only spawn fetches where needed.
@@ -839,12 +861,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                 },
                 Event::Key(KeyEvent { code, .. }) => match code {
                     KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Esc | KeyCode::Backspace => {
-                        // Esc/Backspace acts as "go back" from detail view.
-                        // From the grid it's a no-op (use Q to quit).
-                        if dashboard.show_detail {
-                            dashboard.show_detail = false;
-                        }
+                    KeyCode::Esc | KeyCode::Backspace if dashboard.show_detail => {
+                        dashboard.show_detail = false;
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1039,7 +1057,7 @@ fn run_statusline(args: &Args, config: &Config) {
         } else {
             config.statusline.icons
         },
-        providers: filter_kinds(&args.provider, &config, args.cached),
+        providers: filter_kinds(&args.provider, config, args.cached),
         format: args.format.clone(),
     };
 

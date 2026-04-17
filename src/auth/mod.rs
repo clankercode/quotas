@@ -57,6 +57,25 @@ pub trait AuthResolver: Send + Sync {
     }
 }
 
+pub struct StaticResolver {
+    pub token: String,
+    pub source: String,
+}
+
+#[async_trait]
+impl AuthResolver for StaticResolver {
+    async fn resolve(&self) -> Result<ResolvedAuth> {
+        Ok(ResolvedAuth {
+            credential: AuthCredential::Bearer(self.token.clone()),
+            source: self.source.clone(),
+        })
+    }
+
+    fn have_credentials(&self) -> bool {
+        !self.token.is_empty()
+    }
+}
+
 pub struct MultiResolver {
     resolvers: Vec<Box<dyn AuthResolver>>,
 }

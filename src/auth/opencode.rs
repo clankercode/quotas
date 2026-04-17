@@ -13,6 +13,7 @@ pub enum OpencodeSlot {
     Minimax,
     Kimi,
     Zai,
+    GitHubCopilot,
 }
 
 impl OpencodeSlot {
@@ -23,6 +24,7 @@ impl OpencodeSlot {
             OpencodeSlot::Minimax => "minimax-coding-plan",
             OpencodeSlot::Kimi => "kimi-for-coding",
             OpencodeSlot::Zai => "zai-coding-plan",
+            OpencodeSlot::GitHubCopilot => "github-copilot",
         }
     }
 }

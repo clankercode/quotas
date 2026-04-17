@@ -301,11 +301,9 @@ impl Dashboard {
 
     fn current_page(&self) -> usize {
         let layout = self.last_layout.get();
-        if layout.per_page == 0 {
-            0
-        } else {
-            self.selected_index / layout.per_page
-        }
+        self.selected_index
+            .checked_div(layout.per_page)
+            .unwrap_or(0)
     }
 
     pub fn page_count(&self) -> usize {
