@@ -1,3 +1,4 @@
+use crate::providers::ProviderKind;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -45,8 +46,56 @@ pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub statusline: StatusLine,
     pub staleness: StalenessConfig,
+    pub providers: Providers,
     pub tui: TuiConfig,
     pub ui: Ui,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct Providers {
+    /// Wildcard `"*"` enables all providers except disabled.
+    /// Specific list acts as a whitelist.
+    pub enabled: Vec<String>,
+    pub disabled: Vec<String>,
+}
+
+impl Default for Providers {
+    fn default() -> Self {
+        Self {
+            enabled: vec!["*".into()],
+            disabled: Vec::new(),
+        }
+    }
+}
+
+impl Config {
+    /// Returns which ProviderKinds are enabled per the providers config.
+    /// Whitelist mode: only the named providers.
+    /// Wildcard mode: all except disabled.
+    pub fn providers_enabled_kinds(&self) -> Vec<ProviderKind> {
+        use crate::providers::ProviderKind;
+        let all = ProviderKind::all();
+        // Normalize config values once for comparison
+        let disabled_lower: Vec<String> =
+            self.providers.disabled.iter().map(|s| s.to_lowercase()).collect();
+        if self.providers.enabled.iter().any(|e| e == "*") {
+            all.iter()
+                .filter(|k| {
+                    let slug = k.slug();
+                    !disabled_lower.iter().any(|d| d == slug)
+                })
+                .copied()
+                .collect()
+        } else {
+            let enabled_lower: Vec<String> =
+                self.providers.enabled.iter().map(|s| s.to_lowercase()).collect();
+            all.iter()
+                .filter(|k| enabled_lower.iter().any(|e| e == k.slug()))
+                .copied()
+                .collect()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -151,5 +200,40 @@ mod tests {
         let c: Config = toml::from_str(toml_str).unwrap();
         assert!(!c.tui.auto_refresh);
         assert!(!c.tui.refresh_on_start);
+    }
+
+    #[test]
+    fn providers_default_is_wildcard() {
+        let c = Config::default();
+        assert_eq!(c.providers.enabled, vec!["*"]);
+        assert!(c.providers.disabled.is_empty());
+    }
+
+    #[test]
+    fn providers_wildcard_with_disabled() {
+        let toml_str = r#"
+[providers]
+enabled = ["*"]
+disabled = ["gemini", "kimi"]
+"#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        let enabled = c.providers_enabled_kinds();
+        assert!(!enabled.contains(&ProviderKind::Gemini));
+        assert!(!enabled.contains(&ProviderKind::Kimi));
+        assert!(enabled.contains(&ProviderKind::Claude));
+    }
+
+    #[test]
+    fn providers_whitelist_mode() {
+        let toml_str = r#"
+[providers]
+enabled = ["claude", "kimi"]
+"#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        let enabled = c.providers_enabled_kinds();
+        assert_eq!(enabled.len(), 2);
+        assert!(enabled.contains(&ProviderKind::Claude));
+        assert!(enabled.contains(&ProviderKind::Kimi));
+        assert!(!enabled.contains(&ProviderKind::DeepSeek));
     }
 }

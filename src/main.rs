@@ -265,27 +265,56 @@ fn build_auth_resolver(kind: &ProviderKind) -> Box<dyn AuthResolver> {
     }
 }
 
-fn filter_kinds(names: &[String]) -> Vec<ProviderKind> {
-    if names.is_empty() {
-        return ProviderKind::all().to_vec();
+fn filter_kinds(requested: &[String], config: &Config, cached: bool) -> Vec<ProviderKind> {
+    // CLI --provider overrides config whitelist
+    if !requested.is_empty() {
+        let config_enabled = config.providers_enabled_kinds();
+        let requested_kinds: Vec<_> = requested
+            .iter()
+            .filter_map(|s| normalize_provider(s))
+            .filter(|k| config_enabled.contains(k))
+            .collect();
+
+        // --cached: further filter to only those present in cache
+        if cached {
+            let cache = cache::read_cache();
+            return requested_kinds
+                .into_iter()
+                .filter(|k| cache.entries.contains_key(&k.slug().to_string()))
+                .collect();
+        }
+        return requested_kinds;
     }
-    names
-        .iter()
-        .filter_map(|n| match n.to_lowercase().as_str() {
-            "claude" | "anthropic" => Some(ProviderKind::Claude),
-            "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
-            "cursor" => Some(ProviderKind::Cursor),
-            "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
-            "gemini" => Some(ProviderKind::Gemini),
-            "kimi" | "moonshot" => Some(ProviderKind::Kimi),
-            "minimax" => Some(ProviderKind::Minimax),
-            "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
-            "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
-            "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
-            "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
-            _ => None,
-        })
-        .collect()
+
+    if cached {
+        // No CLI filter with --cached: show whatever is in cache
+        let cache = cache::read_cache();
+        return cache
+            .entries
+            .keys()
+            .filter_map(|s| normalize_provider(s))
+            .collect();
+    }
+
+    // Use config's provider list
+    config.providers_enabled_kinds()
+}
+
+fn normalize_provider(name: &str) -> Option<ProviderKind> {
+    match name.to_lowercase().as_str() {
+        "claude" | "anthropic" => Some(ProviderKind::Claude),
+        "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
+        "cursor" => Some(ProviderKind::Cursor),
+        "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
+        "gemini" => Some(ProviderKind::Gemini),
+        "kimi" | "moonshot" => Some(ProviderKind::Kimi),
+        "minimax" => Some(ProviderKind::Minimax),
+        "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
+        "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
+        "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
+        "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
+        _ => None,
+    }
 }
 
 async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
@@ -917,8 +946,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
 
 fn main() {
     let args = Args::parse();
-    let kinds = filter_kinds(&args.provider);
     let config = Config::load();
+    let kinds = filter_kinds(&args.provider, &config, args.cached);
 
     // Hidden: fetch + write cache, exit silently (used by background refresh).
     if args.update_cache {
@@ -1010,7 +1039,7 @@ fn run_statusline(args: &Args, config: &Config) {
         } else {
             config.statusline.icons
         },
-        providers: filter_kinds(&args.provider),
+        providers: filter_kinds(&args.provider, &config, args.cached),
         format: args.format.clone(),
     };
 
