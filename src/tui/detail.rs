@@ -29,26 +29,38 @@ pub struct DetailRowKey {
     pub hidden: bool,
 }
 
+pub struct DetailRenderOptions<'a> {
+    pub width: u16,
+    pub height: u16,
+    pub mode: DetailMode,
+    pub auto_refresh: bool,
+    pub provider_favorite: bool,
+    pub preferences: &'a QuotaPreferences,
+    pub focused_row: Option<usize>,
+}
+
+struct WindowRenderOptions {
+    bar_width: u16,
+    label_w: usize,
+    show_headers: bool,
+    subrow_indent: String,
+    mode: ResolvedDetailMode,
+    favorite: bool,
+    focused: bool,
+}
+
 impl DetailView {
     pub fn new(result: ProviderResult) -> Self {
         Self { result }
     }
 
-    pub fn render(
-        &self,
-        width: u16,
-        height: u16,
-        mode: DetailMode,
-        auto_refresh: bool,
-        provider_favorite: bool,
-        preferences: &QuotaPreferences,
-        focused_row: Option<usize>,
-    ) -> Text<'_> {
+    pub fn render(&self, options: DetailRenderOptions<'_>) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
         let pct_w: u16 = 10; // room for " 100% used"
         let indent: u16 = 2;
         let gap: u16 = 1; // space between label and bar
-        let resolved_mode = resolve_mode(mode, width, height, &self.result);
+        let resolved_mode =
+            resolve_mode(options.mode, options.width, options.height, &self.result);
 
         // These are refined once we know the actual labels in the provider.
         let label_w: usize;
@@ -59,10 +71,10 @@ impl DetailView {
         lines.push(Line::from(vec![Span::raw(" ")]));
         lines.push(render_header_line(
             &self.result,
-            width,
+            options.width,
             show_freshness,
-            auto_refresh,
-            provider_favorite,
+            options.auto_refresh,
+            options.provider_favorite,
         ));
 
         // Auth source line (env var name, file path, oauth path, etc.)
@@ -90,7 +102,7 @@ impl DetailView {
                 } else {
                     lines.push(Line::from(""));
                     let (visible_windows, hidden_windows) =
-                        partition_windows(&quota.windows, preferences, false);
+                        partition_windows(&quota.windows, options.preferences, false);
                     let buckets_seen: BTreeSet<u8> = visible_windows
                         .iter()
                         .map(|w| bar::window_sort_key(w).0)
@@ -109,9 +121,9 @@ impl DetailView {
                         .max()
                         .unwrap_or(12)
                         .clamp(8, 20);
-                    bar_width = width
+                    bar_width = options.width
                         .saturating_sub(indent + label_w as u16 + gap + pct_w)
-                        .clamp(10, width.saturating_sub(indent + gap + pct_w));
+                        .clamp(10, options.width.saturating_sub(indent + gap + pct_w));
 
                     let subrow_indent = " ".repeat((indent + gap + label_w as u16) as usize);
 
@@ -127,20 +139,17 @@ impl DetailView {
                             }
                             last_bucket = Some(bucket);
                         }
-                        render_window(
-                            &mut lines,
-                            window,
+                        render_window(&mut lines, window, WindowRenderOptions {
                             bar_width,
                             label_w,
                             show_headers,
-                            subrow_indent.clone(),
-                            resolved_mode,
-                            preferences
-                                .favorites
-                                .iter()
-                                .any(|favorite| favorite.eq_ignore_ascii_case(&window.window_type)),
-                            focused_row == Some(visible_idx),
-                        );
+                            subrow_indent: subrow_indent.clone(),
+                            mode: resolved_mode,
+                            favorite: options.preferences.favorites.iter().any(|favorite| {
+                                favorite.eq_ignore_ascii_case(&window.window_type)
+                            }),
+                            focused: options.focused_row == Some(visible_idx),
+                        });
                         if resolved_mode == ResolvedDetailMode::Normal {
                             lines.push(Line::from(""));
                         }
@@ -149,7 +158,7 @@ impl DetailView {
                         let row_idx = visible_windows.len() + hidden_idx;
                         lines.push(render_hidden_row(
                             window,
-                            focused_row == Some(row_idx),
+                            options.focused_row == Some(row_idx),
                         ));
                     }
                 }
@@ -216,20 +225,10 @@ impl DetailView {
     }
 }
 
-fn render_window(
-    lines: &mut Vec<Line<'_>>,
-    w: &QuotaWindow,
-    bar_width: u16,
-    label_w: usize,
-    show_headers: bool,
-    subrow_indent: String,
-    mode: ResolvedDetailMode,
-    favorite: bool,
-    focused: bool,
-) {
-    let label_src = bar::display_label(&w.window_type, show_headers);
-    let row_prefix = if focused { "› " } else { "  " };
-    let marker = if favorite { "★ " } else { "" };
+fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRenderOptions) {
+    let label_src = bar::display_label(&w.window_type, options.show_headers);
+    let row_prefix = if options.focused { "› " } else { "  " };
+    let marker = if options.favorite { "★ " } else { "" };
     // Special-case currency balance rows: no bar, just the formatted amount.
     if let Some((sym, scale)) = bar::currency_window(&w.window_type) {
         lines.push(Line::from(vec![
@@ -237,8 +236,8 @@ fn render_window(
             Span::raw(marker),
             Span::raw(format!(
                 "{:<width$} ",
-                bar::truncate_suffix(&label_src, label_w),
-                width = label_w
+                bar::truncate_suffix(&label_src, options.label_w),
+                width = options.label_w
             )),
             Span::raw(format!("{}{:.2}", sym, w.remaining as f64 / scale)).bold(),
         ]));
@@ -250,10 +249,10 @@ fn render_window(
     let used_pct = (used as f64 / limit as f64).clamp(0.0, 1.0);
     let color = bar::bar_color(used_pct);
     let time_elapsed = bar::time_elapsed_fraction(w);
-    let bar_spans = bar::build(used_pct, time_elapsed, bar_width, color);
+    let bar_spans = bar::build(used_pct, time_elapsed, options.bar_width, color);
 
-    if mode == ResolvedDetailMode::Compact {
-        let compact_label_w = label_w.min(14);
+    if options.mode == ResolvedDetailMode::Compact {
+        let compact_label_w = options.label_w.min(14);
         let mut compact = vec![
             Span::raw(row_prefix),
             Span::raw(marker),
@@ -276,7 +275,7 @@ fn render_window(
         if let Some(reset) = w.reset_at {
             let rel = humanize_duration(reset - Utc::now());
             lines.push(Line::from(vec![
-                Span::raw(subrow_indent),
+                Span::raw(options.subrow_indent),
                 Span::raw(format!("resets in {}", rel)).dim(),
             ]));
         }
@@ -289,8 +288,8 @@ fn render_window(
         Span::raw(marker),
         Span::raw(format!(
             "{:<width$} ",
-            bar::truncate_suffix(&label_src, label_w),
-            width = label_w
+            bar::truncate_suffix(&label_src, options.label_w),
+            width = options.label_w
         )),
     ];
     l1.extend(bar_spans);
@@ -304,7 +303,7 @@ fn render_window(
 
     // Row 2: exact numbers
     lines.push(Line::from(vec![
-        Span::raw(subrow_indent.clone()),
+        Span::raw(options.subrow_indent.clone()),
         Span::raw(format!(
             "{} used · {} left · {} cap",
             fmt_exact(used),
@@ -319,7 +318,7 @@ fn render_window(
         let rel = humanize_duration(reset - Utc::now());
         let abs = reset.format("%Y-%m-%d %H:%M UTC").to_string();
         lines.push(Line::from(vec![
-            Span::raw(subrow_indent.clone()),
+            Span::raw(options.subrow_indent.clone()),
             Span::raw(format!("resets in {} · {}", rel, abs)).dim(),
         ]));
     }
@@ -356,7 +355,7 @@ fn render_window(
             )
         };
         lines.push(Line::from(vec![
-            Span::raw(subrow_indent),
+            Span::raw(options.subrow_indent),
             Span::styled(label, style),
         ]));
     }
@@ -614,13 +613,15 @@ mod tests {
         terminal
             .draw(|f| {
                 let text = view.render(
-                    width,
-                    height,
-                    DetailMode::Auto,
-                    true,
-                    false,
-                    &QuotaPreferences::default(),
-                    None,
+                    DetailRenderOptions {
+                        width,
+                        height,
+                        mode: DetailMode::Auto,
+                        auto_refresh: true,
+                        provider_favorite: false,
+                        preferences: &QuotaPreferences::default(),
+                        focused_row: None,
+                    },
                 );
                 f.render_widget(Paragraph::new(text), f.area());
             })

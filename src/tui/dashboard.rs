@@ -1342,13 +1342,15 @@ impl Dashboard {
                 area.height.saturating_sub(4),
             );
             let text = view.render(
-                detail_area.width,
-                detail_area.height,
-                self.detail_mode,
-                self.auto_refresh_enabled,
-                self.is_provider_favorite(selected.kind.slug()),
-                &quota_preferences,
-                Some(self.detail_focus),
+                super::detail::DetailRenderOptions {
+                    width: detail_area.width,
+                    height: detail_area.height,
+                    mode: self.detail_mode,
+                    auto_refresh: self.auto_refresh_enabled,
+                    provider_favorite: self.is_provider_favorite(selected.kind.slug()),
+                    preferences: &quota_preferences,
+                    focused_row: Some(self.detail_focus),
+                },
             );
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))

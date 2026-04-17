@@ -1,0 +1,20 @@
+ QUOTA DETAIL
+ ← → providers  ↑ ↓ focus  PgUp/PgDn scroll  Tab mode  F favorite  X hide  Enter
+────────────────────────────────────────────────────────────────────────────────
+
+  Copilot                                     Business Updated 3s ago [--------]
+  auth: opencode:github-copilot:oauth
+
+› month    █▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░   2% 294L
+           resets in 13d 10h
+
+  ── raw response ──
+  {
+    "access_type_sku": "copilot_for_business_seat_quota",
+    "analytics_tracking_id": "40e25d06a08295f25753bfce34478770",
+    "assigned_date": "2024-01-24T18:25:59+11:00",
+    "can_signup_for_limited": false,
+    "chat_enabled": true,
+    "copilot_plan": "business",
+    "copilotignore_enabled": false,
+

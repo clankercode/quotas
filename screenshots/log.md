@@ -218,6 +218,22 @@ aesthetic and would need a more invasive layout rework to eliminate.
 ## Iter 6 — natural card heights + minimax reset footer
 
 **Shipped**
+
+---
+
+## Iter 9 — detail layout modes, favorites, and scoped refresh
+
+**Shipped**
+- Detail view now resolves between normal and compact layouts automatically, with a manual `Tab` override in-session.
+- Provider freshness and plan/subscription metadata moved into the detail header so the first screenful carries the important status.
+- Provider favorites now sort first on the dashboard and show a star marker.
+- Detail rows support focused quota favorites and hide/unhide actions, with hidden quotas rendered as dim controls instead of disappearing completely.
+- Periodic auto-refresh is now scoped to the visible provider while detail view is open.
+
+**Observations**
+1. `80x20` no longer wraps quota suffixes in compact mode.
+2. The expanded detail hint line is long on narrow terminals, but it still preserves the key actions without corrupting the frame.
+3. Dashboard snapshots remain stable after adding favorites because visual order is recomputed intentionally rather than on every refresh.
 - `natural_card_height` function: computes the exact vertical footprint
   of a card (borders + header + plan + window rows) so rows use
   `Constraint::Length(natural_h)` instead of `Constraint::Ratio`. A

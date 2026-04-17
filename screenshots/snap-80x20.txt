@@ -1,20 +1,20 @@
  quotas    page 1/2
  ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  [x] Auto  Q Quit  ·
 ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│ ▶ Copilot  Updated 11s ago ✓        │ │   Kimi  Updated 10s ago ⚡          │
+│ ▶ Copilot  Updated 3s ago ✓         │ │   Kimi  Updated 3s ago ⚡           │
 │ Business                            │ │ Kimi Coding Plan                    │
-│ month  2% (6/300)▒▒▒▒▒░░░░░░░░░░░░░ │ │ 5h     0% (0/100)░░░░░░░░░░░░░░░░░░ │
-│        resets in 13d 13h            │ │ 7d     ██████████████100% (100/100) │
+│ month  2% (6/300)▒▒▒▒▒░░░░░░░░░░░░░ │ │ 5h     0% (0/100)▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░ │
+│        resets in 13d 10h            │ │ 7d     ██████████████100% (100/100) │
 │                                     │ │                                     │
 │  ✓ all pacing ahead                 │ │                                     │
 └─────────────────────────────────────┘ └─────────────────────────────────────┘
 ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│   Z.ai  Updated 10s ago ✓           │ │   Cursor  Updated 11s ago           │
+│   Z.ai  Updated 3s ago              │ │   Cursor  Updated 3s ago            │
 │ Z.ai max                            │ │ Pro                                 │
-│ 5h     1% (1/100)▒▒▒▒▒░░░░░░░░░░░░░ │ │ API%   ██████████████100% (10k/10k) │
-│        resets in 2h 20m             │ │ Auto%  ██████████████86% (8.6k/10k) │
+│ 5h     1% (1/100)░░░░░░░░░░░░░░░░░░ │ │ API%   ██████████████100% (10k/10k) │
+│        resets in 4h 59m             │ │ Auto%  ██████████████86% (8.6k/10k) │
 │ MCP    █████38% (1.5k/4k)░░░░░░░░░░ │ │ Bonus  0% (0/16k)░░░░░░░░░░░░░░░░░░ │
-│        resets in 13d 2h             │ │                                     │
+│        resets in 13d 0h             │ │                                     │
 │                                     │ │                                     │
 └─────────────────────────────────────┘ └─────────────────────────────────────┘
 8 of 8 loaded  ·  No key: DeepSeek, OpenRouter, SiliconFlow

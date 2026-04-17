@@ -464,34 +464,37 @@ fn should_periodic_refresh(cached: bool, auto_refresh_enabled: bool) -> bool {
     !cached && auto_refresh_enabled
 }
 
-fn periodic_refresh_candidates(
+struct PeriodicRefreshState<'a> {
     cached: bool,
     auto_refresh_enabled: bool,
     show_detail: bool,
     selected_entry: Option<usize>,
-    kinds: &[ProviderKind],
-    auth_ready: &[bool],
-    entry_done: &[bool],
-    elapsed: &[Duration],
-) -> Vec<usize> {
-    if !should_periodic_refresh(cached, auto_refresh_enabled) {
+    kinds: &'a [ProviderKind],
+    auth_ready: &'a [bool],
+    entry_done: &'a [bool],
+    elapsed: &'a [Duration],
+}
+
+fn periodic_refresh_candidates(state: PeriodicRefreshState<'_>) -> Vec<usize> {
+    if !should_periodic_refresh(state.cached, state.auto_refresh_enabled) {
         return Vec::new();
     }
 
-    let indices: Vec<usize> = if show_detail {
-        selected_entry.into_iter().collect()
+    let indices: Vec<usize> = if state.show_detail {
+        state.selected_entry.into_iter().collect()
     } else {
-        (0..kinds.len()).collect()
+        (0..state.kinds.len()).collect()
     };
 
     indices
         .into_iter()
-        .filter(|&idx| auth_ready.get(idx).copied().unwrap_or(false))
-        .filter(|&idx| entry_done.get(idx).copied().unwrap_or(false))
+        .filter(|&idx| state.auth_ready.get(idx).copied().unwrap_or(false))
+        .filter(|&idx| state.entry_done.get(idx).copied().unwrap_or(false))
         .filter(|&idx| {
-            elapsed
+            state
+                .elapsed
                 .get(idx)
-                .is_some_and(|elapsed| *elapsed >= auto_refresh_interval(kinds[idx]))
+                .is_some_and(|elapsed| *elapsed >= auto_refresh_interval(state.kinds[idx]))
         })
         .collect()
 }
@@ -835,16 +838,16 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         if should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
             let elapsed: Vec<Duration> = last_refresh.iter().map(|instant| instant.elapsed()).collect();
             let entry_done: Vec<bool> = (0..kinds.len()).map(|idx| dashboard.is_entry_done(idx)).collect();
-            let targets = periodic_refresh_candidates(
+            let targets = periodic_refresh_candidates(PeriodicRefreshState {
                 cached,
-                dashboard.auto_refresh_enabled,
-                dashboard.show_detail,
-                dashboard.selected_entry_index(),
-                &kinds,
-                &auth_ready,
-                &entry_done,
-                &elapsed,
-            );
+                auto_refresh_enabled: dashboard.auto_refresh_enabled,
+                show_detail: dashboard.show_detail,
+                selected_entry: dashboard.selected_entry_index(),
+                kinds: &kinds,
+                auth_ready: &auth_ready,
+                entry_done: &entry_done,
+                elapsed: &elapsed,
+            });
             for idx in targets {
                 let kind = kinds[idx];
                 dashboard.reset_one(idx);
@@ -1262,16 +1265,16 @@ mod tests {
             Duration::from_secs(301),
         ];
 
-        let targets = periodic_refresh_candidates(
-            false,
-            true,
-            true,
-            Some(1),
-            &kinds,
-            &auth_ready,
-            &entry_done,
-            &elapsed,
-        );
+        let targets = periodic_refresh_candidates(PeriodicRefreshState {
+            cached: false,
+            auto_refresh_enabled: true,
+            show_detail: true,
+            selected_entry: Some(1),
+            kinds: &kinds,
+            auth_ready: &auth_ready,
+            entry_done: &entry_done,
+            elapsed: &elapsed,
+        });
 
         assert_eq!(targets, vec![1]);
     }
@@ -1287,16 +1290,16 @@ mod tests {
             Duration::from_secs(301),
         ];
 
-        let targets = periodic_refresh_candidates(
-            false,
-            true,
-            false,
-            Some(1),
-            &kinds,
-            &auth_ready,
-            &entry_done,
-            &elapsed,
-        );
+        let targets = periodic_refresh_candidates(PeriodicRefreshState {
+            cached: false,
+            auto_refresh_enabled: true,
+            show_detail: false,
+            selected_entry: Some(1),
+            kinds: &kinds,
+            auth_ready: &auth_ready,
+            entry_done: &entry_done,
+            elapsed: &elapsed,
+        });
 
         assert_eq!(targets, vec![0, 1]);
     }

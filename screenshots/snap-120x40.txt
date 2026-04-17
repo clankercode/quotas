@@ -1,35 +1,35 @@
  quotas
  ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  [x] Auto  Q Quit  · ▒ ahead  █ overspend
 ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐
-│ ▶ Copilot  Updated 11s ago│ │   Kimi  Updated 11s ago ⚡│ │   Z.ai  Updated 10s ago ✓ │ │   Cursor  Updated 11s ago │
+│ ▶ Copilot  Updated 3s ago │ │   Kimi  Updated 2s ago ⚡ │ │   Z.ai  Updated 2s ago    │ │   Cursor  Updated 3s ago  │
 │ Business                  │ │ Kimi Coding Plan          │ │ Z.ai max                  │ │ Pro                       │
-│ month  2% (6/300)░░░░░░░░ │ │ 5h     0% (0/100)░░░░░░░░ │ │ 5h     1% (1/100)░░░░░░░░ │ │ API%   ████100% (10k/10k) │
-│        resets in 13d 13h  │ │ 7d     ████100% (100/100) │ │ MCP    █38% (1.5k/4k)░░░░ │ │ Auto%  ████86% (8.6k/10k) │
+│ month  2% (6/300)░░░░░░░░ │ │ 5h     0% (0/100)▒▒▒▒▒░░░ │ │ 5h     1% (1/100)░░░░░░░░ │ │ API%   ████100% (10k/10k) │
+│        resets in 13d 10h  │ │ 7d     ████100% (100/100) │ │ MCP    █38% (1.5k/4k)░░░░ │ │ Auto%  ████86% (8.6k/10k) │
 │                           │ │                           │ │                           │ │ Bonus  0% (0/16k)░░░░░░░░ │
 │  ✓ all pacing ahead       │ │                           │ │                           │ │                           │
 └───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘
 ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐
-│   Claude  Updated 11s ago │ │   Codex  Updated 11s ago  │ │   Gemini  Updated 11s ago │
+│   Claude  Updated 3s ago  │ │   Codex  Updated 3s ago ⚡│ │   Gemini  Updated 3s ago  │
 │ Claude (Max/Pro)          │ │ Codex / ChatGPT pro       │ │ Gemini API                │
-│ 5h     16% (16/100)▒▒▒▒▒░ │ │ 5h     3% (3/100)░░░░░░░░ │ │ …2.5-flash 21% (21/100)░░ │
-│        resets in 20m      │ │        resets in 4h 23m   │ │ …lash-lite 4% (4/100)░░░░ │
-│ 7d     6% (6/100)░░░░░░░░ │ │ 7d     10% (10/100)░░░░░░ │ │ …i-2.5-pro 100% (100/100) │
-│        resets in 6d 9h    │ │        resets in 6d 13h   │ │ …h-preview 21% (21/100)░░ │
-│ 7d Snt 2% (2/100)░░░░░░░░ │ │ spk/5h ██████80% (80/100) │ │ …o-preview 100% (100/100) │
-│        resets in 6d 14h   │ │        resets in 2h 52m   │ │ …e-preview 4% (4/100)░░░░ │
-│ Creds  ███95% (18.9k/20k) │ │ spk/7d ████55% (55/100)░░ │ │ …o-preview 100% (100/100) │
-│                           │ │        resets in 6d 5h    │ │                           │
+│ 5h     1% (1/100)░░░░░░░░ │ │ 5h     29% (29/100)░░░░░░ │ │ …2.5-flash 28% (28/100)░░ │
+│        resets in 3h 54m   │ │        resets in 1h 58m   │ │ …lash-lite 4% (4/100)░░░░ │
+│ 7d     6% (6/100)░░░░░░░░ │ │ 7d     15% (15/100)░░░░░░ │ │ …i-2.5-pro 100% (100/100) │
+│        resets in 6d 6h    │ │        resets in 6d 10h   │ │ …h-preview 28% (28/100)░░ │
+│ 7d Snt 2% (2/100)░░░░░░░░ │ │ spk/5h ██████94% (94/100) │ │ …o-preview 100% (100/100) │
+│        resets in 6d 11h   │ │        resets in 26m      │ │ …e-preview 4% (4/100)░░░░ │
+│ Creds  ███95% (18.9k/20k) │ │ spk/7d █████60% (60/100)░ │ │ …o-preview 100% (100/100) │
+│                           │ │        resets in 6d 2h    │ │                           │
 │                           │ │                           │ │                           │
-│                           │ │  ⚡ spk/7d: 55% — burning │ │                           │
+│                           │ │  ⚡ spk/7d: 60% — burning │ │                           │
 │                           │ │                           │ │                           │
 └───────────────────────────┘ └───────────────────────────┘ └───────────────────────────┘
 ┌─────────────────────────────────────────────────────────┐
-│   MiniMax  Updated 10s ago ⚡                           │
+│   MiniMax  Updated 2s ago ⚡                            │
 │ MiniMax · MiniMax-M*                                    │
 │                             ── 5h ──        ── 7d ──    │
-│ M*                       0% (72/15k)░░░  14% 21.7k/150k │
-│ c-plan-vlm               0% (72/15k)░░░  14% 21.7k/150k │
-│ c-plan-search            0% (72/15k)░░░  14% 21.7k/150k │
+│ M*                       4% (533/15k)░░  15% 22.2k/150k │
+│ c-plan-vlm               4% (533/15k)░░  15% 22.2k/150k │
+│ c-plan-search            4% (533/15k)░░  15% 22.2k/150k │
 │ speech-hd                23% (2.5k/11k)  13% 10.3k/77k░ │
 │ Hailuo-2.3-Fast-6s-768p  ████100% (2/2)  29% (4/14)░░░░ │
 │ Hailuo-2.3-6s-768p       ████100% (2/2)  29% (4/14)░░░░ │
