@@ -1,10 +1,12 @@
 use super::bar;
-use super::detail::{DetailMode, DetailView};
+use super::detail::{detail_row_keys, DetailMode, DetailView};
+use crate::config::QuotaPreferences;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
 pub enum Direction {
@@ -53,11 +55,14 @@ pub struct Dashboard {
     pub selected_index: usize,
     pub show_detail: bool,
     pub detail_mode: DetailMode,
+    pub detail_focus: usize,
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     pub show_all_windows: bool,
     pub vertical_spanning: bool,
     pub auto_refresh_enabled: bool,
+    favorite_providers: BTreeSet<String>,
+    quota_preferences: std::collections::BTreeMap<String, QuotaPreferences>,
     last_layout: Cell<GridLayout>,
     /// Cached visual order, locked in when all entries are loaded.
     /// Reset to identity order on first load; refreshes don't reshuffle.
@@ -81,11 +86,14 @@ impl Dashboard {
             selected_index: 0,
             show_detail: false,
             detail_mode: DetailMode::Auto,
+            detail_focus: 0,
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
             vertical_spanning: false,
             auto_refresh_enabled: true,
+            favorite_providers: BTreeSet::new(),
+            quota_preferences: std::collections::BTreeMap::new(),
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -107,11 +115,14 @@ impl Dashboard {
             selected_index: 0,
             show_detail: false,
             detail_mode: DetailMode::Auto,
+            detail_focus: 0,
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
             vertical_spanning: false,
             auto_refresh_enabled: true,
+            favorite_providers: BTreeSet::new(),
+            quota_preferences: std::collections::BTreeMap::new(),
             last_layout: Cell::new(GridLayout::default()),
             stable_order: (0..n).collect(),
             mouse_pos: Cell::new(None),
@@ -200,7 +211,7 @@ impl Dashboard {
                 self.selected_index = order[order.len() - 1];
             }
         }
-        self.detail_scroll = 0;
+        self.reset_detail_position();
     }
 
     pub fn detail_next(&mut self) {
@@ -212,7 +223,7 @@ impl Dashboard {
                 self.selected_index = order[0];
             }
         }
-        self.detail_scroll = 0;
+        self.reset_detail_position();
     }
 
     pub fn cycle_detail_mode(&mut self) {
@@ -221,6 +232,54 @@ impl Dashboard {
             DetailMode::Normal => DetailMode::Compact,
             DetailMode::Compact => DetailMode::Auto,
         };
+    }
+
+    pub fn reset_detail_position(&mut self) {
+        self.detail_focus = 0;
+        self.detail_scroll = 0;
+    }
+
+    pub fn set_quota_preferences(&mut self, provider: &str, preferences: QuotaPreferences) {
+        let key = provider.to_ascii_lowercase();
+        if preferences.favorites.is_empty() && preferences.hidden.is_empty() {
+            self.quota_preferences.remove(&key);
+        } else {
+            self.quota_preferences.insert(key, preferences);
+        }
+    }
+
+    pub fn selected_provider_slug(&self) -> Option<String> {
+        Some(self.selected_provider()?.kind.slug().to_string())
+    }
+
+    pub fn selected_detail_row(&self) -> Option<super::detail::DetailRowKey> {
+        let selected = self.selected_provider()?;
+        let prefs = self
+            .quota_preferences
+            .get(selected.kind.slug())
+            .cloned()
+            .unwrap_or_default();
+        detail_row_keys(selected, self.show_all_windows, &prefs)
+            .get(self.detail_focus)
+            .cloned()
+    }
+
+    pub fn move_detail_focus(&mut self, delta: i32) {
+        let Some(selected) = self.selected_provider() else {
+            return;
+        };
+        let prefs = self
+            .quota_preferences
+            .get(selected.kind.slug())
+            .cloned()
+            .unwrap_or_default();
+        let row_count = detail_row_keys(selected, self.show_all_windows, &prefs).len();
+        if row_count == 0 {
+            self.detail_focus = 0;
+            return;
+        }
+        let next = (self.detail_focus as i32 + delta).clamp(0, row_count as i32 - 1);
+        self.detail_focus = next as usize;
     }
 
     fn detail_navigable_order(&self) -> Vec<usize> {
@@ -306,8 +365,41 @@ impl Dashboard {
         let mut indices: Vec<usize> = (0..self.entries.len())
             .filter(|&i| !Self::is_auth_required_entry(&self.entries[i]))
             .collect();
-        indices.sort_by_key(|&i| self.card_weight(&self.entries[i]));
+        indices.sort_by_key(|&i| {
+            (
+                !self.is_provider_favorite(self.kinds[i].slug()),
+                self.card_weight(&self.entries[i]),
+                i,
+            )
+        });
         indices
+    }
+
+    pub fn set_provider_favorite(&mut self, provider: &str, favorite: bool) {
+        if favorite {
+            self.favorite_providers.insert(provider.to_ascii_lowercase());
+        } else {
+            self.favorite_providers.remove(&provider.to_ascii_lowercase());
+        }
+    }
+
+    pub fn refresh_visual_order(&mut self) {
+        self.stable_order = self.compute_visual_order();
+    }
+
+    pub fn toggle_selected_provider_favorite(&mut self) -> Option<String> {
+        let provider = self.selected_provider()?.kind.slug().to_string();
+        if self.is_provider_favorite(&provider) {
+            self.favorite_providers.remove(&provider);
+        } else {
+            self.favorite_providers.insert(provider.clone());
+        }
+        self.stable_order = self.compute_visual_order();
+        Some(provider)
+    }
+
+    pub fn is_provider_favorite(&self, provider: &str) -> bool {
+        self.favorite_providers.contains(&provider.to_ascii_lowercase())
     }
 
     fn current_page(&self) -> usize {
@@ -903,11 +995,17 @@ impl Dashboard {
         match &self.entries[idx] {
             ProviderEntry::Loading => {
                 let name = self.kinds[idx].display_name();
+                let favorite_marker = if self.is_provider_favorite(self.kinds[idx].slug()) {
+                    "★ "
+                } else {
+                    ""
+                };
                 let spinner_char = SPINNER[self.spinner_frame];
                 let text = Text::from(vec![
                     Line::from(vec![Span::raw(format!(
-                        "{} {}",
+                        "{} {}{}",
                         if selected { "▶" } else { " " },
+                        favorite_marker,
                         name
                     ))
                     .bold()]),
@@ -950,13 +1048,19 @@ impl Dashboard {
         use crate::tui::freshness::{FreshnessLabel, Staleness};
 
         let is_auth = matches!(result.status, ProviderStatus::AuthRequired);
+        let favorite_marker = if self.is_provider_favorite(result.kind.slug()) {
+            "★ "
+        } else {
+            ""
+        };
 
         let mut lines: Vec<Line> = Vec::new();
 
         // Header line: name (+ freshness progress bar when auth is present).
         let name_part = format!(
-            "{} {}",
+            "{} {}{}",
             if selected { "▶" } else { " " },
+            favorite_marker,
             result.kind.display_name()
         );
         let name_len = name_part.chars().count();
@@ -1213,7 +1317,7 @@ impl Dashboard {
         let title = Paragraph::new(vec![
             Line::from(vec![Span::raw(" QUOTA DETAIL ").bold().white()]),
             Line::from(vec![Span::raw(
-                " ← → providers  ↑ ↓ scroll  Tab mode  Enter/Esc back  C copy  Q quit ",
+                " ← → providers  ↑ ↓ focus  PgUp/PgDn scroll  Tab mode  F favorite  X hide  Enter/Esc back  C copy  Q quit ",
             )
             .dim()]),
         ])
@@ -1222,6 +1326,11 @@ impl Dashboard {
 
         if let Some(selected) = self.selected_provider() {
             let view = DetailView::new(selected.clone());
+            let quota_preferences = self
+                .quota_preferences
+                .get(selected.kind.slug())
+                .cloned()
+                .unwrap_or_default();
             let detail_area = Rect::new(
                 area.x,
                 area.y + 3,
@@ -1233,6 +1342,9 @@ impl Dashboard {
                 detail_area.height,
                 self.detail_mode,
                 self.auto_refresh_enabled,
+                self.is_provider_favorite(selected.kind.slug()),
+                &quota_preferences,
+                Some(self.detail_focus),
             );
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))
@@ -1738,5 +1850,21 @@ mod tests {
         assert!(out.contains("4%"));
         assert!(out.contains("4/100"));
         assert!(out.contains("2.5-flash") || out.contains("flash"));
+    }
+
+    #[test]
+    fn favorite_providers_sort_first_in_visual_order() {
+        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let entries = vec![
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Codex)),
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Gemini)),
+        ];
+        let mut dashboard = Dashboard::new_with_entries(kinds, entries);
+
+        dashboard.set_provider_favorite("gemini", true);
+        dashboard.stable_order = dashboard.compute_visual_order();
+
+        assert_eq!(dashboard.stable_order[0], 2);
     }
 }

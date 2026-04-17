@@ -605,6 +605,15 @@ fn run_snap(
     dashboard.show_all_windows = config.ui.show_all_windows;
     dashboard.vertical_spanning = config.ui.vertical_spanning;
     dashboard.auto_refresh_enabled = config.tui.auto_refresh;
+    for provider in &config.favorites.providers {
+        dashboard.set_provider_favorite(provider, true);
+    }
+    for (provider, preferences) in &config.quota_preferences {
+        dashboard.set_quota_preferences(provider, preferences.clone());
+    }
+    if dashboard.all_loaded() {
+        dashboard.refresh_visual_order();
+    }
 
     let out = render_dashboard_text(&dashboard, width, height);
     let pages = dashboard.page_count();
@@ -633,6 +642,7 @@ fn run_snap(
     }
 }
 fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
+    let mut config = config;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(2)
@@ -723,6 +733,15 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     dashboard.show_all_windows = config.ui.show_all_windows;
     dashboard.vertical_spanning = config.ui.vertical_spanning;
     dashboard.auto_refresh_enabled = config.tui.auto_refresh;
+    for provider in &config.favorites.providers {
+        dashboard.set_provider_favorite(provider, true);
+    }
+    for (provider, preferences) in &config.quota_preferences {
+        dashboard.set_quota_preferences(provider, preferences.clone());
+    }
+    if dashboard.all_loaded() {
+        dashboard.refresh_visual_order();
+    }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -847,7 +866,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                     // Second click on already-selected card → open detail.
                                     dashboard.show_detail = true;
                                     dashboard.detail_mode = DetailMode::Auto;
-                                    dashboard.detail_scroll = 0;
+                                    dashboard.reset_detail_position();
                                 } else {
                                     dashboard.selected_index = vpos;
                                     dashboard.show_detail = false;
@@ -891,17 +910,47 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                             }
                         }
                     }
+                    KeyCode::Char('f') | KeyCode::Char('F') if dashboard.show_detail => {
+                        if let Some(provider) = dashboard.selected_provider_slug() {
+                            if let Some(row) = dashboard.selected_detail_row() {
+                                config.toggle_quota_favorite(&provider, &row.quota_key);
+                                let prefs = config.quota_preferences_for(&provider);
+                                dashboard.set_quota_preferences(&provider, prefs);
+                            } else {
+                                config.toggle_provider_favorite(&provider);
+                                dashboard.toggle_selected_provider_favorite();
+                            }
+                            let _ = config.save();
+                        }
+                    }
+                    KeyCode::Char('f') | KeyCode::Char('F') => {
+                        if let Some(provider) = dashboard.toggle_selected_provider_favorite() {
+                            config.toggle_provider_favorite(&provider);
+                            let _ = config.save();
+                        }
+                    }
+                    KeyCode::Char('x') | KeyCode::Char('X') if dashboard.show_detail => {
+                        if let Some(provider) = dashboard.selected_provider_slug() {
+                            if let Some(row) = dashboard.selected_detail_row() {
+                                config.toggle_quota_hidden(&provider, &row.quota_key);
+                                let prefs = config.quota_preferences_for(&provider);
+                                dashboard.set_quota_preferences(&provider, prefs);
+                                dashboard.move_detail_focus(0);
+                                let _ = config.save();
+                            }
+                        }
+                    }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
                     }
                     KeyCode::Enter => {
                         if dashboard.show_detail {
                             dashboard.show_detail = false;
-                            dashboard.detail_scroll = 0;
+                            dashboard.reset_detail_position();
                         } else {
                             dashboard.show_detail = true;
                             dashboard.detail_mode = DetailMode::Auto;
-                            dashboard.detail_scroll = 0;
+                            dashboard.reset_detail_position();
                         }
                     }
                     KeyCode::Tab if dashboard.show_detail => {
@@ -923,14 +972,14 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         if dashboard.show_detail {
-                            dashboard.scroll_detail(-3);
+                            dashboard.move_detail_focus(-1);
                         } else {
                             dashboard.navigate(Direction::Up);
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if dashboard.show_detail {
-                            dashboard.scroll_detail(3);
+                            dashboard.move_detail_focus(1);
                         } else {
                             dashboard.navigate(Direction::Down);
                         }

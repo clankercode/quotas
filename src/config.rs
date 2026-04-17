@@ -1,9 +1,10 @@
 use crate::providers::ProviderKind;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StalenessConfig {
     /// Default staleness threshold in seconds (default: 300 = 5 minutes).
@@ -32,7 +33,7 @@ impl Default for StalenessConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Ui {
     pub show_all_windows: bool,
@@ -40,16 +41,18 @@ pub struct Ui {
     pub vertical_spanning: bool,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct GitHubCopilotConfig {
     pub token: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
+    pub favorites: FavoritesConfig,
+    pub quota_preferences: BTreeMap<String, QuotaPreferences>,
     pub statusline: StatusLine,
     pub staleness: StalenessConfig,
     pub providers: Providers,
@@ -58,7 +61,20 @@ pub struct Config {
     pub github_copilot: GitHubCopilotConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FavoritesConfig {
+    pub providers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct QuotaPreferences {
+    pub favorites: Vec<String>,
+    pub hidden: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Providers {
     /// Wildcard `"*"` enables all providers except disabled.
@@ -105,7 +121,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TuiConfig {
     pub auto_refresh: bool,
@@ -121,7 +137,7 @@ impl Default for TuiConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AutoRefresh {
     pub enabled: bool,
@@ -133,7 +149,7 @@ impl Default for AutoRefresh {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct StatusLine {
     pub icons: bool,
@@ -168,6 +184,82 @@ impl Config {
             return Self::default();
         };
         toml::from_str::<Config>(&content).unwrap_or_default()
+    }
+
+    pub fn save(&self) -> io::Result<()> {
+        let Some(path) = Self::config_path() else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self).map_err(io::Error::other)?;
+        std::fs::write(path, content)
+    }
+
+    pub fn is_provider_favorited(&self, provider: &str) -> bool {
+        contains_case_insensitive(&self.favorites.providers, provider)
+    }
+
+    pub fn toggle_provider_favorite(&mut self, provider: &str) {
+        toggle_value(&mut self.favorites.providers, provider);
+    }
+
+    pub fn quota_preferences_for(&self, provider: &str) -> QuotaPreferences {
+        self.quota_preferences
+            .get(&provider.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn is_quota_favorited(&self, provider: &str, quota_key: &str) -> bool {
+        self.quota_preferences
+            .get(&provider.to_ascii_lowercase())
+            .is_some_and(|prefs| contains_case_insensitive(&prefs.favorites, quota_key))
+    }
+
+    pub fn is_quota_hidden(&self, provider: &str, quota_key: &str) -> bool {
+        self.quota_preferences
+            .get(&provider.to_ascii_lowercase())
+            .is_some_and(|prefs| contains_case_insensitive(&prefs.hidden, quota_key))
+    }
+
+    pub fn toggle_quota_favorite(&mut self, provider: &str, quota_key: &str) {
+        let prefs = self
+            .quota_preferences
+            .entry(provider.to_ascii_lowercase())
+            .or_default();
+        toggle_value(&mut prefs.favorites, quota_key);
+        if prefs.favorites.is_empty() && prefs.hidden.is_empty() {
+            self.quota_preferences.remove(&provider.to_ascii_lowercase());
+        }
+    }
+
+    pub fn toggle_quota_hidden(&mut self, provider: &str, quota_key: &str) {
+        let prefs = self
+            .quota_preferences
+            .entry(provider.to_ascii_lowercase())
+            .or_default();
+        toggle_value(&mut prefs.hidden, quota_key);
+        if prefs.favorites.is_empty() && prefs.hidden.is_empty() {
+            self.quota_preferences.remove(&provider.to_ascii_lowercase());
+        }
+    }
+}
+
+fn contains_case_insensitive(values: &[String], needle: &str) -> bool {
+    values.iter().any(|value| value.eq_ignore_ascii_case(needle))
+}
+
+fn toggle_value(values: &mut Vec<String>, needle: &str) {
+    if let Some(idx) = values
+        .iter()
+        .position(|value| value.eq_ignore_ascii_case(needle))
+    {
+        values.remove(idx);
+    } else {
+        values.push(needle.to_string());
+        values.sort_by_key(|value| value.to_ascii_lowercase());
     }
 }
 
@@ -242,5 +334,38 @@ enabled = ["claude", "kimi"]
         assert!(enabled.contains(&ProviderKind::Claude));
         assert!(enabled.contains(&ProviderKind::Kimi));
         assert!(!enabled.contains(&ProviderKind::DeepSeek));
+    }
+
+    #[test]
+    fn parses_persisted_provider_and_quota_preferences() {
+        let toml_str = r#"
+[favorites]
+providers = ["codex", "claude"]
+
+[quota_preferences.codex]
+favorites = ["5h", "spark/7d"]
+hidden = ["o3/weekly"]
+"#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+
+        assert!(c.is_provider_favorited("codex"));
+        assert!(c.is_provider_favorited("claude"));
+        assert!(c.is_quota_favorited("codex", "spark/7d"));
+        assert!(c.is_quota_hidden("codex", "o3/weekly"));
+    }
+
+    #[test]
+    fn serializes_preferences_round_trip() {
+        let mut c = Config::default();
+        c.toggle_provider_favorite("codex");
+        c.toggle_quota_favorite("codex", "7d");
+        c.toggle_quota_hidden("codex", "spark/7d");
+
+        let encoded = toml::to_string(&c).unwrap();
+        let decoded: Config = toml::from_str(&encoded).unwrap();
+
+        assert!(decoded.is_provider_favorited("codex"));
+        assert!(decoded.is_quota_favorited("codex", "7d"));
+        assert!(decoded.is_quota_hidden("codex", "spark/7d"));
     }
 }

@@ -35,9 +35,13 @@ cargo install quotas
 quotas
 ```
 
-Keybinds: `←↑↓→` navigate, `Enter` drill into a card, `R` refresh,
-`A` toggle auto-refresh, `C` copy selected provider's JSON to clipboard,
-`Q` quit.
+Keybinds: `←↑↓→` navigate providers, `Enter` drill into a card, `R` refresh,
+`A` toggle auto-refresh, `F` favorite the selected provider on the dashboard,
+`C` copy selected provider's JSON to clipboard, `Q` quit.
+
+Inside detail view: `Tab` cycles `auto/normal/compact` detail layout,
+`↑` / `↓` move the quota focus, `PgUp` / `PgDn` scroll, `F` favorites the
+focused quota, and `X` hides or unhides the focused quota row.
 
 TUI refresh settings live in `~/.config/quotas/config.toml`:
 
@@ -49,6 +53,13 @@ refresh_on_start = true   # fetch after the TUI loads, even with fresh cache
 [providers]
 enabled = ["*"]    # wildcard = all providers; specific list = whitelist
 disabled = []     # exclude from enabled set
+
+[favorites]
+providers = ["claude", "codex"]   # favorite providers sort first
+
+[quota_preferences.codex]
+favorites = ["5h", "spark/7d"]    # favorite quotas render first
+hidden = ["o3/weekly"]            # hidden quotas stay collapsed in detail view
 ```
 
 ### JSON output

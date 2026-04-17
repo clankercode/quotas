@@ -1,3 +1,4 @@
+use crate::config::QuotaPreferences;
 use crate::providers::{ProviderResult, ProviderStatus, QuotaWindow};
 use crate::tui::bar;
 use crate::tui::freshness::FreshnessLabel;
@@ -22,6 +23,12 @@ pub struct DetailView {
     pub result: ProviderResult,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DetailRowKey {
+    pub quota_key: String,
+    pub hidden: bool,
+}
+
 impl DetailView {
     pub fn new(result: ProviderResult) -> Self {
         Self { result }
@@ -33,6 +40,9 @@ impl DetailView {
         height: u16,
         mode: DetailMode,
         auto_refresh: bool,
+        provider_favorite: bool,
+        preferences: &QuotaPreferences,
+        focused_row: Option<usize>,
     ) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
         let pct_w: u16 = 10; // room for " 100% used"
@@ -52,6 +62,7 @@ impl DetailView {
             width,
             show_freshness,
             auto_refresh,
+            provider_favorite,
         ));
 
         // Auth source line (env var name, file path, oauth path, etc.)
@@ -78,14 +89,17 @@ impl DetailView {
                     .dim()]));
                 } else {
                     lines.push(Line::from(""));
-                    let mut sorted: Vec<&QuotaWindow> = quota.windows.iter().collect();
-                    sorted.sort_by_key(|w| bar::window_sort_key(w));
-                    let buckets_seen: BTreeSet<u8> =
-                        sorted.iter().map(|w| bar::window_sort_key(w).0).collect();
-                    let show_headers = sorted.len() >= 3 && buckets_seen.len() >= 2;
+                    let (visible_windows, hidden_windows) =
+                        partition_windows(&quota.windows, preferences, false);
+                    let buckets_seen: BTreeSet<u8> = visible_windows
+                        .iter()
+                        .map(|w| bar::window_sort_key(w).0)
+                        .collect();
+                    let show_headers =
+                        visible_windows.len() >= 3 && buckets_seen.len() >= 2;
 
                     // Compute label width from actual labels so we don't waste space.
-                    label_w = sorted
+                    label_w = visible_windows
                         .iter()
                         .map(|w| {
                             bar::display_label(&w.window_type, show_headers)
@@ -102,7 +116,7 @@ impl DetailView {
                     let subrow_indent = " ".repeat((indent + gap + label_w as u16) as usize);
 
                     let mut last_bucket: Option<u8> = None;
-                    for window in sorted {
+                    for (visible_idx, window) in visible_windows.iter().enumerate() {
                         let bucket = bar::window_sort_key(window).0;
                         if show_headers && Some(bucket) != last_bucket {
                             if let Some(label) = bar::bucket_label(bucket) {
@@ -121,10 +135,22 @@ impl DetailView {
                             show_headers,
                             subrow_indent.clone(),
                             resolved_mode,
+                            preferences
+                                .favorites
+                                .iter()
+                                .any(|favorite| favorite.eq_ignore_ascii_case(&window.window_type)),
+                            focused_row == Some(visible_idx),
                         );
                         if resolved_mode == ResolvedDetailMode::Normal {
                             lines.push(Line::from(""));
                         }
+                    }
+                    for (hidden_idx, window) in hidden_windows.iter().enumerate() {
+                        let row_idx = visible_windows.len() + hidden_idx;
+                        lines.push(render_hidden_row(
+                            window,
+                            focused_row == Some(row_idx),
+                        ));
                     }
                 }
             }
@@ -198,12 +224,17 @@ fn render_window(
     show_headers: bool,
     subrow_indent: String,
     mode: ResolvedDetailMode,
+    favorite: bool,
+    focused: bool,
 ) {
     let label_src = bar::display_label(&w.window_type, show_headers);
+    let row_prefix = if focused { "› " } else { "  " };
+    let marker = if favorite { "★ " } else { "" };
     // Special-case currency balance rows: no bar, just the formatted amount.
     if let Some((sym, scale)) = bar::currency_window(&w.window_type) {
         lines.push(Line::from(vec![
-            Span::raw("  "),
+            Span::raw(row_prefix),
+            Span::raw(marker),
             Span::raw(format!(
                 "{:<width$} ",
                 bar::truncate_suffix(&label_src, label_w),
@@ -224,7 +255,8 @@ fn render_window(
     if mode == ResolvedDetailMode::Compact {
         let compact_label_w = label_w.min(14);
         let mut compact = vec![
-            Span::raw("  "),
+            Span::raw(row_prefix),
+            Span::raw(marker),
             Span::raw(format!(
                 "{:<width$} ",
                 bar::truncate_suffix(&label_src, compact_label_w),
@@ -253,7 +285,8 @@ fn render_window(
 
     // Row 1: name + bar + % used
     let mut l1 = vec![
-        Span::raw("  "),
+        Span::raw(row_prefix),
+        Span::raw(marker),
         Span::raw(format!(
             "{:<width$} ",
             bar::truncate_suffix(&label_src, label_w),
@@ -344,8 +377,13 @@ fn render_header_line(
     width: u16,
     show_freshness: bool,
     auto_refresh: bool,
+    provider_favorite: bool,
 ) -> Line<'static> {
-    let provider = result.kind.display_name();
+    let provider = if provider_favorite {
+        format!("★ {}", result.kind.display_name())
+    } else {
+        result.kind.display_name().to_string()
+    };
     let plan = match &result.status {
         ProviderStatus::Available { quota } => quota.plan_name.clone(),
         _ => String::new(),
@@ -368,7 +406,7 @@ fn render_header_line(
     let plan_width = available.saturating_sub(provider_width + usize::from(!plan.is_empty()));
     let mut row = format!(
         "  {:<provider_width$}",
-        truncate_text(provider, provider_width.max(1)),
+        truncate_text(&provider, provider_width.max(1)),
         provider_width = provider_width
     );
     if !plan.is_empty() && plan_width > 0 {
@@ -390,6 +428,74 @@ fn render_header_line(
         row.push_str(&freshness);
     }
     Line::from(vec![Span::raw(row)])
+}
+
+fn render_hidden_row(window: &QuotaWindow, focused: bool) -> Line<'static> {
+    let prefix = if focused { "› " } else { "  " };
+    let label = bar::display_label(&window.window_type, false);
+    Line::from(vec![
+        Span::raw(prefix),
+        Span::raw(format!("[x] hidden quota '{}' (press x to show)", label)).dim(),
+    ])
+}
+
+fn partition_windows<'a>(
+    windows: &'a [QuotaWindow],
+    preferences: &QuotaPreferences,
+    show_all_windows: bool,
+) -> (Vec<&'a QuotaWindow>, Vec<&'a QuotaWindow>) {
+    let mut visible = Vec::new();
+    let mut hidden = Vec::new();
+    for window in windows {
+        let hidden_by_pref = preferences
+            .hidden
+            .iter()
+            .any(|hidden_key| hidden_key.eq_ignore_ascii_case(&window.window_type));
+        let hidden_by_ui = !show_all_windows
+            && bar::autohide_window(&window.window_type)
+            && window.limit <= 0
+            && bar::currency_window(&window.window_type).is_none();
+        if hidden_by_pref || hidden_by_ui {
+            hidden.push(window);
+        } else {
+            visible.push(window);
+        }
+    }
+    visible.sort_by_key(|window| {
+        (
+            !preferences
+                .favorites
+                .iter()
+                .any(|favorite| favorite.eq_ignore_ascii_case(&window.window_type)),
+            bar::window_sort_key(window),
+        )
+    });
+    hidden.sort_by_key(|window| bar::window_sort_key(window));
+    (visible, hidden)
+}
+
+pub fn detail_row_keys(
+    result: &ProviderResult,
+    show_all_windows: bool,
+    preferences: &QuotaPreferences,
+) -> Vec<DetailRowKey> {
+    match &result.status {
+        ProviderStatus::Available { quota } => {
+            let (visible, hidden) = partition_windows(&quota.windows, preferences, show_all_windows);
+            visible
+                .into_iter()
+                .map(|window| DetailRowKey {
+                    quota_key: window.window_type.clone(),
+                    hidden: false,
+                })
+                .chain(hidden.into_iter().map(|window| DetailRowKey {
+                    quota_key: window.window_type.clone(),
+                    hidden: true,
+                }))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn refresh_meter(fraction: f64, width: usize) -> String {
@@ -507,7 +613,15 @@ mod tests {
         let view = DetailView::new(result);
         terminal
             .draw(|f| {
-                let text = view.render(width, height, DetailMode::Auto, true);
+                let text = view.render(
+                    width,
+                    height,
+                    DetailMode::Auto,
+                    true,
+                    false,
+                    &QuotaPreferences::default(),
+                    None,
+                );
                 f.render_widget(Paragraph::new(text), f.area());
             })
             .unwrap();
@@ -611,5 +725,59 @@ mod tests {
         assert!(out.contains("Gemini API"));
         assert!(out.contains("Updated"));
         assert!(!out.contains("4 used · 96 left · 100 cap"));
+    }
+
+    #[test]
+    fn detail_row_keys_put_favorites_first_and_hidden_last() {
+        let result = ProviderResult {
+            kind: ProviderKind::Claude,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Claude".into(),
+                    windows: vec![
+                        QuotaWindow {
+                            window_type: "7d".into(),
+                            used: 4,
+                            limit: 100,
+                            remaining: 96,
+                            reset_at: None,
+                            period_seconds: None,
+                        },
+                        QuotaWindow {
+                            window_type: "5h".into(),
+                            used: 1,
+                            limit: 100,
+                            remaining: 99,
+                            reset_at: None,
+                            period_seconds: None,
+                        },
+                        QuotaWindow {
+                            window_type: "spark/7d".into(),
+                            used: 2,
+                            limit: 100,
+                            remaining: 98,
+                            reset_at: None,
+                            period_seconds: None,
+                        },
+                    ],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        };
+        let prefs = QuotaPreferences {
+            favorites: vec!["spark/7d".into()],
+            hidden: vec!["5h".into()],
+        };
+
+        let rows = detail_row_keys(&result, false, &prefs);
+
+        assert_eq!(rows[0].quota_key, "spark/7d");
+        assert!(!rows[0].hidden);
+        assert_eq!(rows[2].quota_key, "5h");
+        assert!(rows[2].hidden);
     }
 }
