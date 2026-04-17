@@ -6,7 +6,7 @@ mod provider_card;
 mod usage_bar;
 
 pub use dashboard::{Dashboard, Direction, HitResult, ProviderEntry};
-pub use detail::DetailView;
+pub use detail::{DetailMode, DetailView};
 pub use freshness::{FreshnessLabel, Staleness};
 pub use provider_card::ProviderCard;
 pub use usage_bar::UsageBar;

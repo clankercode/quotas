@@ -1,5 +1,5 @@
 use super::bar;
-use super::detail::DetailView;
+use super::detail::{DetailMode, DetailView};
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
@@ -52,6 +52,7 @@ pub struct Dashboard {
     pub entries: Vec<ProviderEntry>,
     pub selected_index: usize,
     pub show_detail: bool,
+    pub detail_mode: DetailMode,
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     pub show_all_windows: bool,
@@ -79,6 +80,7 @@ impl Dashboard {
             entries,
             selected_index: 0,
             show_detail: false,
+            detail_mode: DetailMode::Auto,
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
@@ -104,6 +106,7 @@ impl Dashboard {
             entries,
             selected_index: 0,
             show_detail: false,
+            detail_mode: DetailMode::Auto,
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
@@ -210,6 +213,14 @@ impl Dashboard {
             }
         }
         self.detail_scroll = 0;
+    }
+
+    pub fn cycle_detail_mode(&mut self) {
+        self.detail_mode = match self.detail_mode {
+            DetailMode::Auto => DetailMode::Normal,
+            DetailMode::Normal => DetailMode::Compact,
+            DetailMode::Compact => DetailMode::Auto,
+        };
     }
 
     fn detail_navigable_order(&self) -> Vec<usize> {
@@ -1202,7 +1213,7 @@ impl Dashboard {
         let title = Paragraph::new(vec![
             Line::from(vec![Span::raw(" QUOTA DETAIL ").bold().white()]),
             Line::from(vec![Span::raw(
-                " ← → providers  ↑ ↓ scroll  Enter/Esc back  C copy  Q quit ",
+                " ← → providers  ↑ ↓ scroll  Tab mode  Enter/Esc back  C copy  Q quit ",
             )
             .dim()]),
         ])
@@ -1217,7 +1228,12 @@ impl Dashboard {
                 area.width,
                 area.height.saturating_sub(4),
             );
-            let text = view.render(detail_area.width);
+            let text = view.render(
+                detail_area.width,
+                detail_area.height,
+                self.detail_mode,
+                self.auto_refresh_enabled,
+            );
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))
                 .wrap(Wrap { trim: false })

@@ -19,6 +19,7 @@ use quotas::output::json::JsonOutput;
 use quotas::output::statusline::{self, StatusLineConfig};
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
 use quotas::tui::Dashboard;
+use quotas::tui::DetailMode;
 use quotas::tui::Direction;
 use quotas::tui::HitResult;
 use quotas::tui::ProviderEntry;
@@ -845,6 +846,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 if dashboard.selected_index == vpos && !dashboard.show_detail {
                                     // Second click on already-selected card → open detail.
                                     dashboard.show_detail = true;
+                                    dashboard.detail_mode = DetailMode::Auto;
                                     dashboard.detail_scroll = 0;
                                 } else {
                                     dashboard.selected_index = vpos;
@@ -898,8 +900,12 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                             dashboard.detail_scroll = 0;
                         } else {
                             dashboard.show_detail = true;
+                            dashboard.detail_mode = DetailMode::Auto;
                             dashboard.detail_scroll = 0;
                         }
+                    }
+                    KeyCode::Tab if dashboard.show_detail => {
+                        dashboard.cycle_detail_mode();
                     }
                     KeyCode::Left | KeyCode::Char('h') => {
                         if dashboard.show_detail {

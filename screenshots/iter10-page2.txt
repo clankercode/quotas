@@ -1,0 +1,20 @@
+ quotas    page 2/2
+ ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  [x] Auto  Q Quit  ·
+┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
+│ ▶ Claude  Cached 4m ago             │ │   Codex  Cached 4m ago ⚡            │
+│ Claude (Max/Pro)                    │ │ Codex / ChatGPT pro                 │
+│ 5h     0% (0/100)░░░░░░░░░░░░░░░░░░ │ │ 5h     14% (14/100)░░░░░░░░░░░░░░░░ │
+│ + 3 more · Enter for detail         │ │ + 3 more · Enter for detail         │
+└─────────────────────────────────────┘ └─────────────────────────────────────┘
+┌─────────────────────────────────────┐
+│   Gemini  Cached 4m ago             │
+│ Gemini API                          │
+│ + 7 more · Enter for detail         │
+└─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│   MiniMax  Cached 4m ago ⚡                                                  │
+│ MiniMax · MiniMax-M*                                                        │
+│                                  ── 5h ──                  ── 7d ──         │
+│ M*                       2% (301/15k)░░░░░░░░░░░░  15% (21.9k/150k)░░░░░░░░ │
+└─────────────────────────────────────────────────────────────────────────────┘
+8 of 8 loaded  ·  No key: DeepSeek, OpenRouter, SiliconFlow

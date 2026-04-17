@@ -1,9 +1,22 @@
 use crate::providers::{ProviderResult, ProviderStatus, QuotaWindow};
 use crate::tui::bar;
-use crate::tui::freshness::{FreshnessLabel, Staleness};
+use crate::tui::freshness::FreshnessLabel;
 use chrono::Utc;
 use ratatui::prelude::*;
 use std::collections::BTreeSet;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailMode {
+    Auto,
+    Normal,
+    Compact,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResolvedDetailMode {
+    Normal,
+    Compact,
+}
 
 pub struct DetailView {
     pub result: ProviderResult,
@@ -14,11 +27,18 @@ impl DetailView {
         Self { result }
     }
 
-    pub fn render(&self, width: u16) -> Text<'_> {
+    pub fn render(
+        &self,
+        width: u16,
+        height: u16,
+        mode: DetailMode,
+        auto_refresh: bool,
+    ) -> Text<'_> {
         let mut lines: Vec<Line> = Vec::new();
         let pct_w: u16 = 10; // room for " 100% used"
         let indent: u16 = 2;
         let gap: u16 = 1; // space between label and bar
+        let resolved_mode = resolve_mode(mode, width, height, &self.result);
 
         // These are refined once we know the actual labels in the provider.
         let label_w: usize;
@@ -27,17 +47,12 @@ impl DetailView {
         // Header — freshness only when we have valid auth data.
         let show_freshness = !matches!(self.result.status, ProviderStatus::AuthRequired);
         lines.push(Line::from(vec![Span::raw(" ")]));
-        let mut header_spans = vec![
-            Span::raw("  "),
-            Span::raw(self.result.kind.display_name())
-                .bold()
-                .fg(Color::White),
-        ];
-        if show_freshness {
-            header_spans.push(Span::raw("   "));
-            header_spans.push(freshness_span(&self.result));
-        }
-        lines.push(Line::from(header_spans));
+        lines.push(render_header_line(
+            &self.result,
+            width,
+            show_freshness,
+            auto_refresh,
+        ));
 
         // Auth source line (env var name, file path, oauth path, etc.)
         if let Some(source) = &self.result.auth_source {
@@ -49,11 +64,6 @@ impl DetailView {
 
         match &self.result.status {
             ProviderStatus::Available { quota } => {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(quota.plan_name.clone()).italic().dim(),
-                ]));
-
                 if quota.unlimited {
                     lines.push(Line::from(""));
                     lines.push(Line::from(vec![
@@ -110,8 +120,11 @@ impl DetailView {
                             label_w,
                             show_headers,
                             subrow_indent.clone(),
+                            resolved_mode,
                         );
-                        lines.push(Line::from(""));
+                        if resolved_mode == ResolvedDetailMode::Normal {
+                            lines.push(Line::from(""));
+                        }
                     }
                 }
             }
@@ -184,6 +197,7 @@ fn render_window(
     label_w: usize,
     show_headers: bool,
     subrow_indent: String,
+    mode: ResolvedDetailMode,
 ) {
     let label_src = bar::display_label(&w.window_type, show_headers);
     // Special-case currency balance rows: no bar, just the formatted amount.
@@ -206,6 +220,36 @@ fn render_window(
     let color = bar::bar_color(used_pct);
     let time_elapsed = bar::time_elapsed_fraction(w);
     let bar_spans = bar::build(used_pct, time_elapsed, bar_width, color);
+
+    if mode == ResolvedDetailMode::Compact {
+        let compact_label_w = label_w.min(14);
+        let mut compact = vec![
+            Span::raw("  "),
+            Span::raw(format!(
+                "{:<width$} ",
+                bar::truncate_suffix(&label_src, compact_label_w),
+                width = compact_label_w
+            )),
+        ];
+        compact.extend(bar_spans);
+        compact.push(Span::raw(" "));
+        compact.push(
+            Span::raw(format!("{:>3.0}% ", used_pct * 100.0))
+                .bold()
+                .fg(color),
+        );
+        compact.push(Span::raw(format!("{}L", fmt_exact(w.remaining))).dim());
+        lines.push(Line::from(compact));
+
+        if let Some(reset) = w.reset_at {
+            let rel = humanize_duration(reset - Utc::now());
+            lines.push(Line::from(vec![
+                Span::raw(subrow_indent),
+                Span::raw(format!("resets in {}", rel)).dim(),
+            ]));
+        }
+        return;
+    }
 
     // Row 1: name + bar + % used
     let mut l1 = vec![
@@ -285,21 +329,117 @@ fn render_window(
     }
 }
 
-fn freshness_span(result: &ProviderResult) -> Span<'static> {
-    let label = if let Some(cached_at) = result.cached_at {
+fn freshness_label(result: &ProviderResult) -> FreshnessLabel {
+    if let Some(cached_at) = result.cached_at {
         let age = (Utc::now() - cached_at).num_seconds().max(0);
         FreshnessLabel::cached(age)
     } else {
         let age = (Utc::now() - result.fetched_at).num_seconds().max(0);
         FreshnessLabel::with_interval(age, result.kind.auto_refresh_secs())
+    }
+}
+
+fn render_header_line(
+    result: &ProviderResult,
+    width: u16,
+    show_freshness: bool,
+    auto_refresh: bool,
+) -> Line<'static> {
+    let provider = result.kind.display_name();
+    let plan = match &result.status {
+        ProviderStatus::Available { quota } => quota.plan_name.clone(),
+        _ => String::new(),
     };
-    let style = match label.staleness {
-        Staleness::Fresh => Style::new().cyan(),
-        Staleness::Warning => Style::new().yellow(),
-        Staleness::Stale => Style::new().red(),
-        Staleness::Cached => Style::new().green(),
+    let freshness = if show_freshness {
+        let label = freshness_label(result);
+        if auto_refresh && !label.is_cached {
+            format!("{} {}", label.label, refresh_meter(label.fraction, 8))
+        } else {
+            label.label
+        }
+    } else {
+        String::new()
     };
-    Span::styled(label.label, style)
+
+    let total_width = width.saturating_sub(2) as usize;
+    let freshness_width = freshness.chars().count();
+    let available = total_width.saturating_sub(freshness_width + usize::from(!freshness.is_empty()));
+    let provider_width = available.min(18).max(available.min(provider.chars().count().max(1)));
+    let plan_width = available.saturating_sub(provider_width + usize::from(!plan.is_empty()));
+    let mut row = format!(
+        "  {:<provider_width$}",
+        truncate_text(provider, provider_width.max(1)),
+        provider_width = provider_width
+    );
+    if !plan.is_empty() && plan_width > 0 {
+        row.push(' ');
+        row.push_str(&format!(
+            "{:>plan_width$}",
+            truncate_text(&plan, plan_width),
+            plan_width = plan_width
+        ));
+    }
+    if !freshness.is_empty() {
+        let current_width = row.chars().count();
+        let freshness_start = total_width.saturating_sub(freshness_width);
+        if current_width < freshness_start {
+            row.push_str(&" ".repeat(freshness_start - current_width));
+        } else {
+            row.push(' ');
+        }
+        row.push_str(&freshness);
+    }
+    Line::from(vec![Span::raw(row)])
+}
+
+fn refresh_meter(fraction: f64, width: usize) -> String {
+    let filled = ((fraction.clamp(0.0, 1.0)) * width as f64).round() as usize;
+    let mut out = String::with_capacity(width + 2);
+    out.push('[');
+    for idx in 0..width {
+        out.push(if idx < filled { '=' } else { '-' });
+    }
+    out.push(']');
+    out
+}
+
+fn truncate_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= width {
+        return text.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let mut out: String = chars.into_iter().take(width - 1).collect();
+    out.push('…');
+    out
+}
+
+fn resolve_mode(
+    mode: DetailMode,
+    width: u16,
+    height: u16,
+    result: &ProviderResult,
+) -> ResolvedDetailMode {
+    match mode {
+        DetailMode::Normal => ResolvedDetailMode::Normal,
+        DetailMode::Compact => ResolvedDetailMode::Compact,
+        DetailMode::Auto => {
+            let window_count = match &result.status {
+                ProviderStatus::Available { quota } => quota.windows.len(),
+                _ => 0,
+            };
+            if width < 96 || height < 16 || (height < 20 && window_count >= 2) {
+                ResolvedDetailMode::Compact
+            } else {
+                ResolvedDetailMode::Normal
+            }
+        }
+    }
 }
 
 fn fmt_exact(n: i64) -> String {
@@ -367,7 +507,7 @@ mod tests {
         let view = DetailView::new(result);
         terminal
             .draw(|f| {
-                let text = view.render(width);
+                let text = view.render(width, height, DetailMode::Auto, true);
                 f.render_widget(Paragraph::new(text), f.area());
             })
             .unwrap();
@@ -444,5 +584,32 @@ mod tests {
         assert!(out.contains("96 left"));
         assert!(out.contains("100 cap"));
         assert!(out.contains("resets in"));
+    }
+
+    #[test]
+    fn moves_plan_into_header_above_the_fold() {
+        let out = render_detail_text(gemini_fraction_quota_result(), 80, 18);
+        let lines: Vec<&str> = out.lines().collect();
+
+        assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
+        assert!(lines.get(1).is_some_and(|line| line.contains("Updated")));
+        assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
+        assert!(lines.get(2).is_some_and(|line| line.contains("auth: oauth")));
+        assert!(
+            lines
+                .iter()
+                .take(4)
+                .any(|line| line.contains("Gemini API")),
+            "expected plan name near the header"
+        );
+    }
+
+    #[test]
+    fn compact_layout_kicks_in_for_short_detail_view() {
+        let out = render_detail_text(gemini_fraction_quota_result(), 80, 10);
+
+        assert!(out.contains("Gemini API"));
+        assert!(out.contains("Updated"));
+        assert!(!out.contains("4 used · 96 left · 100 cap"));
     }
 }
