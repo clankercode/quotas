@@ -315,7 +315,28 @@ async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
 async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
     maybe_refresh_creds(kind, config).await;
     let auth = build_auth_resolver(&kind, config);
-    let provider: Box<dyn Provider> = match kind {
+    let provider = build_provider(kind, auth);
+    // Pre-resolve to capture the auth source string for the detail view.
+    // This is a lightweight re-resolve (env var / file read) after any token
+    // refresh that already happened in maybe_refresh_creds.
+    let auth_source = provider
+        .auth_resolver()
+        .resolve()
+        .await
+        .ok()
+        .map(|a| a.source);
+
+    let mut result = match provider.fetch().await {
+        Ok(r) => r,
+        Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
+        Err(e) => network_error_result(kind, e.to_string()),
+    };
+    result.auth_source = auth_source;
+    result
+}
+
+fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Provider> {
+    match kind {
         ProviderKind::Claude => Box::new(quotas::providers::claude::ClaudeProvider::new(auth)),
         ProviderKind::Codex => Box::new(quotas::providers::codex::CodexProvider::new(auth)),
         ProviderKind::Cursor => Box::new(quotas::providers::cursor::CursorProvider::new(auth)),
@@ -340,24 +361,7 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
         ProviderKind::GitHubCopilot => {
             Box::new(quotas::providers::github_copilot::GitHubCopilotProvider::new(auth))
         }
-    };
-    // Pre-resolve to capture the auth source string for the detail view.
-    // This is a lightweight re-resolve (env var / file read) after any token
-    // refresh that already happened in maybe_refresh_creds.
-    let auth_source = provider
-        .auth_resolver()
-        .resolve()
-        .await
-        .ok()
-        .map(|a| a.source);
-
-    let mut result = match provider.fetch().await {
-        Ok(r) => r,
-        Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
-        Err(e) => network_error_result(kind, e.to_string()),
-    };
-    result.auth_source = auth_source;
-    result
+    }
 }
 
 fn fetch_provider_sync(kind: ProviderKind, config: &Config) -> ProviderResult {
