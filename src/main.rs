@@ -548,6 +548,137 @@ fn fetch_with_staleness_check(kinds: Vec<ProviderKind>, config: &Config) -> Vec<
     results
 }
 
+struct TuiStartupPlan {
+    entries: Vec<ProviderEntry>,
+    fetch_indices: Vec<usize>,
+    auth_ready: Vec<bool>,
+}
+
+struct PlannedProviderEntry {
+    entry: ProviderEntry,
+    fetch_on_start: bool,
+}
+
+fn build_tui_startup_plan(
+    kinds: &[ProviderKind],
+    config: &Config,
+    disk_cache: &cache::CacheFile,
+    now: chrono::DateTime<chrono::Utc>,
+    cached: bool,
+) -> TuiStartupPlan {
+    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
+        .iter()
+        .map(|kind| build_auth_resolver(kind, config))
+        .collect();
+    let auth_ready: Vec<bool> = auth_resolvers
+        .iter()
+        .map(|resolver| resolver.have_credentials())
+        .collect();
+
+    let mut entries = Vec::with_capacity(kinds.len());
+    let mut fetch_indices = Vec::new();
+    for (idx, kind) in kinds.iter().enumerate() {
+        let cached_entry = disk_cache.entries.get(kind.slug());
+        let planned = plan_tui_provider_entry(
+            *kind,
+            cached_entry,
+            cached,
+            config.tui.refresh_on_start,
+            auth_ready[idx],
+            now,
+        );
+        if planned.fetch_on_start {
+            fetch_indices.push(idx);
+        }
+        entries.push(planned.entry);
+    }
+
+    TuiStartupPlan {
+        entries,
+        fetch_indices,
+        auth_ready,
+    }
+}
+
+fn plan_tui_provider_entry(
+    kind: ProviderKind,
+    cached_entry: Option<&cache::CacheEntry>,
+    cached_mode: bool,
+    refresh_on_start: bool,
+    has_creds: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> PlannedProviderEntry {
+    let fetch_on_start = should_startup_fetch(cached_mode, refresh_on_start, has_creds);
+
+    if cached_mode {
+        let result = match cached_entry {
+            Some(entry) => cached_provider_result(entry),
+            None if has_creds => ProviderResult {
+                kind,
+                status: quotas::providers::ProviderStatus::AuthRequired,
+                fetched_at: now,
+                raw_response: None,
+                auth_source: None,
+                cached_at: None,
+            },
+            None => auth_required_result(kind, "no credentials".into()),
+        };
+        return PlannedProviderEntry {
+            entry: ProviderEntry::Done(result),
+            fetch_on_start: false,
+        };
+    }
+
+    if let Some(entry) = cached_entry {
+        let result = cached_provider_result(entry);
+        return PlannedProviderEntry {
+            entry: if fetch_on_start {
+                ProviderEntry::Refreshing(result)
+            } else {
+                ProviderEntry::Done(result)
+            },
+            fetch_on_start,
+        };
+    }
+
+    if has_creds {
+        if fetch_on_start {
+            return PlannedProviderEntry {
+                entry: ProviderEntry::Loading,
+                fetch_on_start: true,
+            };
+        }
+
+        return PlannedProviderEntry {
+            entry: ProviderEntry::Done(ProviderResult {
+                kind,
+                status: quotas::providers::ProviderStatus::Unavailable {
+                    info: quotas::providers::UnavailableInfo {
+                        reason: "No cached data; startup refresh disabled".into(),
+                        console_url: None,
+                    },
+                },
+                fetched_at: now,
+                raw_response: None,
+                auth_source: None,
+                cached_at: None,
+            }),
+            fetch_on_start: false,
+        };
+    }
+
+    PlannedProviderEntry {
+        entry: ProviderEntry::Done(auth_required_result(kind, "no credentials".into())),
+        fetch_on_start: false,
+    }
+}
+
+fn cached_provider_result(entry: &cache::CacheEntry) -> ProviderResult {
+    let mut result = entry.result.clone();
+    result.cached_at = Some(entry.cached_at);
+    result
+}
+
 type FetchMessage = (usize, ProviderResult);
 type FetchReceiver = tokio::sync::mpsc::UnboundedReceiver<FetchMessage>;
 type FetchSender = tokio::sync::mpsc::UnboundedSender<FetchMessage>;
@@ -856,91 +987,13 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         .build()
         .map_err(io::Error::other)?;
 
-    // Read cache and build auth resolvers for credential pre-checking.
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
-    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
-        .iter()
-        .map(|k| build_auth_resolver(k, &config))
-        .collect();
-    let auth_ready: Vec<bool> = auth_resolvers
-        .iter()
-        .map(|resolver| resolver.have_credentials())
-        .collect();
-
-    // Build initial entries: prefer cached data when fresh, skip fetches for
-    // providers without credentials, only spawn fetches where needed.
-    let mut initial_entries = Vec::with_capacity(kinds.len());
-    let mut fetch_indices: Vec<usize> = Vec::new();
-
-    for (idx, kind) in kinds.iter().enumerate() {
-        let key = kind.slug().to_string();
-        let has_creds = auth_ready[idx];
-        let fetch_on_start = should_startup_fetch(cached, config.tui.refresh_on_start, has_creds);
-
-        if cached {
-            // --cached: only show cache, never fetch.
-            if let Some(entry) = disk_cache.entries.get(&key) {
-                let mut result = entry.result.clone();
-                result.cached_at = Some(entry.cached_at);
-                initial_entries.push(ProviderEntry::Done(result));
-            } else if has_creds {
-                initial_entries.push(ProviderEntry::Done(ProviderResult {
-                    kind: *kind,
-                    status: quotas::providers::ProviderStatus::AuthRequired,
-                    fetched_at: now,
-                    raw_response: None,
-                    auth_source: None,
-                    cached_at: None,
-                }));
-            } else {
-                initial_entries.push(ProviderEntry::Done(auth_required_result(
-                    *kind,
-                    "no credentials".into(),
-                )));
-            }
-            continue;
-        }
-
-        if let Some(entry) = disk_cache.entries.get(&key) {
-            // Show cached data immediately. By default the TUI still fetches
-            // fresh data after load, even when cache is within staleness.
-            let mut result = entry.result.clone();
-            result.cached_at = Some(entry.cached_at);
-            if fetch_on_start {
-                initial_entries.push(ProviderEntry::Refreshing(result));
-                fetch_indices.push(idx);
-            } else {
-                initial_entries.push(ProviderEntry::Done(result));
-            }
-        } else if has_creds {
-            if fetch_on_start {
-                // No cache but credentials exist — show loading spinner.
-                initial_entries.push(ProviderEntry::Loading);
-                fetch_indices.push(idx);
-            } else {
-                initial_entries.push(ProviderEntry::Done(ProviderResult {
-                    kind: *kind,
-                    status: quotas::providers::ProviderStatus::Unavailable {
-                        info: quotas::providers::UnavailableInfo {
-                            reason: "No cached data; startup refresh disabled".into(),
-                            console_url: None,
-                        },
-                    },
-                    fetched_at: now,
-                    raw_response: None,
-                    auth_source: None,
-                    cached_at: None,
-                }));
-            }
-        } else {
-            // No cache, no credentials — show auth required.
-            initial_entries.push(ProviderEntry::Done(auth_required_result(
-                *kind,
-                "no credentials".into(),
-            )));
-        }
-    }
+    let TuiStartupPlan {
+        entries: initial_entries,
+        fetch_indices,
+        auth_ready,
+    } = build_tui_startup_plan(&kinds, &config, &disk_cache, now, cached);
 
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
     dashboard.show_all_windows = config.ui.show_all_windows;
@@ -1349,6 +1402,89 @@ mod tests {
     }
 
     #[test]
+    fn startup_plan_uses_cached_entry_without_fetch_in_cached_mode() {
+        let now = chrono::Utc::now();
+        let cached = test_cache_entry(ProviderKind::Claude);
+
+        let planned =
+            plan_tui_provider_entry(ProviderKind::Claude, Some(&cached), true, true, true, now);
+
+        assert!(!planned.fetch_on_start);
+        match planned.entry {
+            ProviderEntry::Done(result) => {
+                assert_eq!(result.kind, ProviderKind::Claude);
+                assert_eq!(result.cached_at, Some(cached.cached_at));
+            }
+            _ => panic!("expected cached result to be done"),
+        }
+    }
+
+    #[test]
+    fn startup_plan_refreshes_cached_entry_when_startup_fetch_enabled() {
+        let now = chrono::Utc::now();
+        let cached = test_cache_entry(ProviderKind::Codex);
+
+        let planned =
+            plan_tui_provider_entry(ProviderKind::Codex, Some(&cached), false, true, true, now);
+
+        assert!(planned.fetch_on_start);
+        match planned.entry {
+            ProviderEntry::Refreshing(result) => {
+                assert_eq!(result.kind, ProviderKind::Codex);
+                assert_eq!(result.cached_at, Some(cached.cached_at));
+            }
+            _ => panic!("expected cached result to refresh"),
+        }
+    }
+
+    #[test]
+    fn startup_plan_reports_missing_cache_when_refresh_disabled() {
+        let planned = plan_tui_provider_entry(
+            ProviderKind::Gemini,
+            None,
+            false,
+            false,
+            true,
+            chrono::Utc::now(),
+        );
+
+        assert!(!planned.fetch_on_start);
+        match planned.entry {
+            ProviderEntry::Done(ProviderResult {
+                status: quotas::providers::ProviderStatus::Unavailable { info },
+                ..
+            }) => {
+                assert_eq!(info.reason, "No cached data; startup refresh disabled");
+            }
+            _ => panic!("expected unavailable result"),
+        }
+    }
+
+    #[test]
+    fn startup_plan_requires_auth_without_credentials() {
+        let planned = plan_tui_provider_entry(
+            ProviderKind::DeepSeek,
+            None,
+            false,
+            true,
+            false,
+            chrono::Utc::now(),
+        );
+
+        assert!(!planned.fetch_on_start);
+        match planned.entry {
+            ProviderEntry::Done(ProviderResult {
+                kind,
+                status: quotas::providers::ProviderStatus::AuthRequired,
+                ..
+            }) => {
+                assert_eq!(kind, ProviderKind::DeepSeek);
+            }
+            _ => panic!("expected auth required result"),
+        }
+    }
+
+    #[test]
     fn periodic_refresh_follows_tui_toggle() {
         assert!(should_periodic_refresh(false, true));
         assert!(!should_periodic_refresh(false, false));
@@ -1435,5 +1571,20 @@ mod tests {
     fn snap_page_output_path_handles_no_extension() {
         let path = snap_page_output_path("screenshots/snap", 3);
         assert_eq!(path.to_string_lossy(), "screenshots/snap-page3");
+    }
+
+    fn test_cache_entry(kind: ProviderKind) -> cache::CacheEntry {
+        let cached_at = chrono::Utc::now() - chrono::Duration::minutes(10);
+        cache::CacheEntry {
+            result: ProviderResult {
+                kind,
+                status: quotas::providers::ProviderStatus::AuthRequired,
+                fetched_at: cached_at,
+                raw_response: None,
+                auth_source: None,
+                cached_at: None,
+            },
+            cached_at,
+        }
     }
 }
