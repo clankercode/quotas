@@ -123,126 +123,88 @@ fn parse_key_file(content: &str) -> Option<String> {
     None
 }
 
+fn env_auth(vars: &[(&'static str, &'static str)]) -> Box<dyn AuthResolver> {
+    Box::new(EnvResolver::new(vars.to_vec()))
+}
+
+fn home_paths(paths: &[&str]) -> Vec<PathBuf> {
+    let home = dirs::home_dir().unwrap_or_default();
+    paths.iter().map(|path| home.join(path)).collect()
+}
+
+fn key_file_auth(paths: &[&str], source_name: &str) -> Box<dyn AuthResolver> {
+    Box::new(FileResolver::new(
+        home_paths(paths),
+        parse_key_file,
+        source_name,
+    ))
+}
+
+fn cookie_file_auth(paths: &[&str], source_name: &str) -> Box<dyn AuthResolver> {
+    Box::new(CookieFileResolver::new(home_paths(paths), source_name))
+}
+
+fn opencode_auth(slot: OpencodeSlot) -> Box<dyn AuthResolver> {
+    Box::new(OpencodeAuthResolver::new(slot))
+}
+
+fn multi_auth(resolvers: Vec<Box<dyn AuthResolver>>) -> Box<dyn AuthResolver> {
+    Box::new(MultiResolver::new(resolvers))
+}
+
 fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthResolver> {
     match kind {
-        ProviderKind::Minimax => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![("MINIMAX_API_KEY", "minimax")])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".minimax")],
-                    parse_key_file,
-                    "minimax",
-                )),
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Minimax)),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::Zai => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![
-                    ("ZHIPU_API_KEY", "zhipu"),
-                    ("ZAI_API_KEY", "zai"),
-                ])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".api-zai")],
-                    parse_key_file,
-                    "zai",
-                )),
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Zai)),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::Kimi => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![
-                    ("MOONSHOT_API_KEY", "moonshot"),
-                    ("KIMI_API_KEY", "kimi"),
-                ])),
-                Box::new(FileResolver::new(
-                    vec![
-                        dirs::home_dir().unwrap_or_default().join(".moonshot"),
-                        dirs::home_dir().unwrap_or_default().join(".kimi"),
-                    ],
-                    parse_key_file,
-                    "kimi",
-                )),
-                Box::new(KimiCliResolver::new()),
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Kimi)),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::Claude => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(OAuthFileResolver::claude()),
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Anthropic)),
-                Box::new(EnvResolver::new(vec![("ANTHROPIC_API_KEY", "anthropic")])),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::Codex => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(OAuthFileResolver::codex()),
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::Openai)),
-                Box::new(EnvResolver::new(vec![("OPENAI_API_KEY", "openai")])),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
+        ProviderKind::Minimax => multi_auth(vec![
+            env_auth(&[("MINIMAX_API_KEY", "minimax")]),
+            key_file_auth(&[".minimax"], "minimax"),
+            opencode_auth(OpencodeSlot::Minimax),
+        ]),
+        ProviderKind::Zai => multi_auth(vec![
+            env_auth(&[("ZHIPU_API_KEY", "zhipu"), ("ZAI_API_KEY", "zai")]),
+            key_file_auth(&[".api-zai"], "zai"),
+            opencode_auth(OpencodeSlot::Zai),
+        ]),
+        ProviderKind::Kimi => multi_auth(vec![
+            env_auth(&[("MOONSHOT_API_KEY", "moonshot"), ("KIMI_API_KEY", "kimi")]),
+            key_file_auth(&[".moonshot", ".kimi"], "kimi"),
+            Box::new(KimiCliResolver::new()),
+            opencode_auth(OpencodeSlot::Kimi),
+        ]),
+        ProviderKind::Claude => multi_auth(vec![
+            Box::new(OAuthFileResolver::claude()),
+            opencode_auth(OpencodeSlot::Anthropic),
+            env_auth(&[("ANTHROPIC_API_KEY", "anthropic")]),
+        ]),
+        ProviderKind::Codex => multi_auth(vec![
+            Box::new(OAuthFileResolver::codex()),
+            opencode_auth(OpencodeSlot::Openai),
+            env_auth(&[("OPENAI_API_KEY", "openai")]),
+        ]),
         ProviderKind::Cursor => Box::new(CursorAuthResolver::new()),
-        ProviderKind::DeepSeek => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![("DEEPSEEK_API_KEY", "deepseek")])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".deepseek")],
-                    parse_key_file,
-                    "deepseek",
-                )),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::Gemini => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(OAuthFileResolver::gemini()),
-                Box::new(EnvResolver::new(vec![("GEMINI_API_KEY", "gemini")])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".gemini-api-key")],
-                    parse_key_file,
-                    "gemini",
-                )),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::SiliconFlow => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![
-                    ("SILICONFLOW_API_KEY", "siliconflow"),
-                    ("SILICON_FLOW_API_KEY", "siliconflow"),
-                ])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".siliconflow")],
-                    parse_key_file,
-                    "siliconflow",
-                )),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
-        ProviderKind::OpenRouter => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(EnvResolver::new(vec![("OPENROUTER_API_KEY", "openrouter")])),
-                Box::new(FileResolver::new(
-                    vec![dirs::home_dir().unwrap_or_default().join(".openrouter")],
-                    parse_key_file,
-                    "openrouter",
-                )),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
+        ProviderKind::DeepSeek => multi_auth(vec![
+            env_auth(&[("DEEPSEEK_API_KEY", "deepseek")]),
+            key_file_auth(&[".deepseek"], "deepseek"),
+        ]),
+        ProviderKind::Gemini => multi_auth(vec![
+            Box::new(OAuthFileResolver::gemini()),
+            env_auth(&[("GEMINI_API_KEY", "gemini")]),
+            key_file_auth(&[".gemini-api-key"], "gemini"),
+        ]),
+        ProviderKind::SiliconFlow => multi_auth(vec![
+            env_auth(&[
+                ("SILICONFLOW_API_KEY", "siliconflow"),
+                ("SILICON_FLOW_API_KEY", "siliconflow"),
+            ]),
+            key_file_auth(&[".siliconflow"], "siliconflow"),
+        ]),
+        ProviderKind::OpenRouter => multi_auth(vec![
+            env_auth(&[("OPENROUTER_API_KEY", "openrouter")]),
+            key_file_auth(&[".openrouter"], "openrouter"),
+        ]),
         ProviderKind::GitHubCopilot => {
-            let mut resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(OpencodeAuthResolver::new(OpencodeSlot::GitHubCopilot)),
-                Box::new(EnvResolver::new(vec![(
-                    "GITHUB_COPILOT_TOKEN",
-                    "github_copilot",
-                )])),
+            let mut resolvers = vec![
+                opencode_auth(OpencodeSlot::GitHubCopilot),
+                env_auth(&[("GITHUB_COPILOT_TOKEN", "github_copilot")]),
             ];
             if let Some(token) = config.github_copilot.token.clone() {
                 resolvers.push(Box::new(StaticResolver {
@@ -250,36 +212,17 @@ fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthReso
                     source: "config:github_copilot.token".into(),
                 }));
             }
-            Box::new(MultiResolver::new(resolvers))
+            multi_auth(resolvers)
         }
-        ProviderKind::Mimo => {
-            let resolvers: Vec<Box<dyn AuthResolver>> = vec![
-                Box::new(CookieFileResolver::new(
-                    vec![
-                        dirs::home_dir()
-                            .unwrap_or_default()
-                            .join(".config/mimo/cookie"),
-                        dirs::home_dir().unwrap_or_default().join(".mimo-cookie"),
-                    ],
-                    "mimo-cookie",
-                )),
-                Box::new(EnvResolver::new(vec![
-                    ("XIAOMI_MIMO_API_KEY", "xiaomi_mimo"),
-                    ("XIAOMI_API_KEY", "xiaomi"),
-                    ("MIMO_API_KEY", "mimo"),
-                ])),
-                Box::new(FileResolver::new(
-                    vec![
-                        dirs::home_dir().unwrap_or_default().join(".mimo-key"),
-                        dirs::home_dir().unwrap_or_default().join(".xiaomimimo"),
-                        dirs::home_dir().unwrap_or_default().join(".mimo"),
-                    ],
-                    parse_key_file,
-                    "mimo",
-                )),
-            ];
-            Box::new(MultiResolver::new(resolvers))
-        }
+        ProviderKind::Mimo => multi_auth(vec![
+            cookie_file_auth(&[".config/mimo/cookie", ".mimo-cookie"], "mimo-cookie"),
+            env_auth(&[
+                ("XIAOMI_MIMO_API_KEY", "xiaomi_mimo"),
+                ("XIAOMI_API_KEY", "xiaomi"),
+                ("MIMO_API_KEY", "mimo"),
+            ]),
+            key_file_auth(&[".mimo-key", ".xiaomimimo", ".mimo"], "mimo"),
+        ]),
     }
 }
 
