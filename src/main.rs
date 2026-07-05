@@ -854,6 +854,21 @@ fn snap_page_output_path(path: &str, page_number: usize) -> PathBuf {
     }
 }
 
+fn apply_dashboard_config(dashboard: &mut Dashboard, config: &Config) {
+    dashboard.show_all_windows = config.ui.show_all_windows;
+    dashboard.vertical_spanning = config.ui.vertical_spanning;
+    dashboard.auto_refresh_enabled = config.tui.auto_refresh;
+    for provider in &config.favorites.providers {
+        dashboard.set_provider_favorite(provider, true);
+    }
+    for (provider, preferences) in &config.quota_preferences {
+        dashboard.set_quota_preferences(provider, preferences.clone());
+    }
+    if dashboard.all_loaded() {
+        dashboard.refresh_visual_order();
+    }
+}
+
 fn run_snap(
     kinds: Vec<ProviderKind>,
     config: Config,
@@ -869,9 +884,7 @@ fn run_snap(
         .map(|kind| {
             let key = kind.slug().to_string();
             if let Some(entry) = disk_cache.entries.get(&key) {
-                let mut result = entry.result.clone();
-                result.cached_at = Some(entry.cached_at);
-                ProviderEntry::Done(result)
+                ProviderEntry::Done(cached_provider_result(entry))
             } else {
                 ProviderEntry::Done(ProviderResult {
                     kind: *kind,
@@ -886,20 +899,7 @@ fn run_snap(
         .collect();
 
     let mut dashboard = Dashboard::new_with_entries(kinds, entries);
-
-    // Apply config settings so snap respects the user's layout preferences.
-    dashboard.show_all_windows = config.ui.show_all_windows;
-    dashboard.vertical_spanning = config.ui.vertical_spanning;
-    dashboard.auto_refresh_enabled = config.tui.auto_refresh;
-    for provider in &config.favorites.providers {
-        dashboard.set_provider_favorite(provider, true);
-    }
-    for (provider, preferences) in &config.quota_preferences {
-        dashboard.set_quota_preferences(provider, preferences.clone());
-    }
-    if dashboard.all_loaded() {
-        dashboard.refresh_visual_order();
-    }
+    apply_dashboard_config(&mut dashboard, &config);
 
     let out = render_dashboard_text(&dashboard, width, height);
     let pages = dashboard.page_count();
@@ -1140,18 +1140,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     } = build_tui_startup_plan(&kinds, &config, &disk_cache, now, cached);
 
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
-    dashboard.show_all_windows = config.ui.show_all_windows;
-    dashboard.vertical_spanning = config.ui.vertical_spanning;
-    dashboard.auto_refresh_enabled = config.tui.auto_refresh;
-    for provider in &config.favorites.providers {
-        dashboard.set_provider_favorite(provider, true);
-    }
-    for (provider, preferences) in &config.quota_preferences {
-        dashboard.set_quota_preferences(provider, preferences.clone());
-    }
-    if dashboard.all_loaded() {
-        dashboard.refresh_visual_order();
-    }
+    apply_dashboard_config(&mut dashboard, &config);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
