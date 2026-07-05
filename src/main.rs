@@ -1,6 +1,7 @@
 use clap::Parser;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -979,6 +980,202 @@ fn run_snap(
         }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TuiLoopAction {
+    Continue,
+    Quit,
+}
+
+struct TuiEventContext<'a> {
+    rt: &'a tokio::runtime::Runtime,
+    kinds: &'a [ProviderKind],
+    auth_ready: &'a [bool],
+    config: &'a mut Config,
+    dashboard: &'a mut Dashboard,
+    fetches: &'a mut TuiFetchController,
+}
+
+fn handle_tui_event(event: Event, ctx: TuiEventContext<'_>) -> TuiLoopAction {
+    match event {
+        Event::Mouse(mouse) => handle_mouse_event(mouse, ctx),
+        Event::Key(key) => handle_key_event(key.code, ctx),
+        _ => TuiLoopAction::Continue,
+    }
+}
+
+fn handle_mouse_event(mouse: MouseEvent, ctx: TuiEventContext<'_>) -> TuiLoopAction {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.scroll_detail(3);
+            } else {
+                ctx.dashboard.navigate(Direction::Down);
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.scroll_detail(-3);
+            } else {
+                ctx.dashboard.navigate(Direction::Up);
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            match ctx.dashboard.hit_test(mouse.column, mouse.row) {
+                Some(HitResult::Refresh) => {
+                    ctx.fetches.refresh_all_fetchable(
+                        ctx.rt,
+                        ctx.kinds,
+                        ctx.config,
+                        ctx.auth_ready,
+                        ctx.dashboard,
+                    );
+                }
+                Some(HitResult::AutoRefreshToggle) => {
+                    ctx.dashboard.auto_refresh_enabled = !ctx.dashboard.auto_refresh_enabled;
+                }
+                Some(HitResult::Quit) => return TuiLoopAction::Quit,
+                Some(HitResult::Card(vpos)) => {
+                    if ctx.dashboard.selected_index == vpos && !ctx.dashboard.show_detail {
+                        // Second click on already-selected card opens detail.
+                        ctx.dashboard.show_detail = true;
+                        ctx.dashboard.detail_mode = DetailMode::Auto;
+                        ctx.dashboard.reset_detail_position();
+                    } else {
+                        ctx.dashboard.selected_index = vpos;
+                        ctx.dashboard.show_detail = false;
+                    }
+                }
+                None => {}
+            }
+        }
+        MouseEventKind::Moved => {
+            ctx.dashboard.set_mouse_pos(mouse.column, mouse.row);
+        }
+        _ => {}
+    }
+
+    TuiLoopAction::Continue
+}
+
+fn handle_key_event(code: KeyCode, ctx: TuiEventContext<'_>) -> TuiLoopAction {
+    match code {
+        KeyCode::Char('q') | KeyCode::Char('Q') => return TuiLoopAction::Quit,
+        KeyCode::Esc | KeyCode::Backspace if ctx.dashboard.show_detail => {
+            ctx.dashboard.show_detail = false;
+        }
+        KeyCode::Char('r') | KeyCode::Char('R') => {
+            ctx.fetches.refresh_all_fetchable(
+                ctx.rt,
+                ctx.kinds,
+                ctx.config,
+                ctx.auth_ready,
+                ctx.dashboard,
+            );
+        }
+        KeyCode::Char('c') | KeyCode::Char('C') => {
+            if let Some(selected) = ctx.dashboard.selected_provider() {
+                if let Ok(json) = serde_json::to_string_pretty(selected) {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(&json);
+                    }
+                }
+            }
+        }
+        KeyCode::Char('f') | KeyCode::Char('F') if ctx.dashboard.show_detail => {
+            if let Some(provider) = ctx.dashboard.selected_provider_slug() {
+                if let Some(row) = ctx.dashboard.selected_detail_row() {
+                    ctx.config.toggle_quota_favorite(&provider, &row.quota_key);
+                    let prefs = ctx.config.quota_preferences_for(&provider);
+                    ctx.dashboard.set_quota_preferences(&provider, prefs);
+                } else {
+                    ctx.config.toggle_provider_favorite(&provider);
+                    ctx.dashboard.toggle_selected_provider_favorite();
+                }
+                let _ = ctx.config.save();
+            }
+        }
+        KeyCode::Char('f') | KeyCode::Char('F') => {
+            if let Some(provider) = ctx.dashboard.toggle_selected_provider_favorite() {
+                ctx.config.toggle_provider_favorite(&provider);
+                let _ = ctx.config.save();
+            }
+        }
+        KeyCode::Char('x') | KeyCode::Char('X') if ctx.dashboard.show_detail => {
+            if let Some(provider) = ctx.dashboard.selected_provider_slug() {
+                if let Some(row) = ctx.dashboard.selected_detail_row() {
+                    ctx.config.toggle_quota_hidden(&provider, &row.quota_key);
+                    let prefs = ctx.config.quota_preferences_for(&provider);
+                    ctx.dashboard.set_quota_preferences(&provider, prefs);
+                    ctx.dashboard.move_detail_focus(0);
+                    let _ = ctx.config.save();
+                }
+            }
+        }
+        KeyCode::Char('a') | KeyCode::Char('A') => {
+            ctx.dashboard.auto_refresh_enabled = !ctx.dashboard.auto_refresh_enabled;
+        }
+        KeyCode::Enter => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.show_detail = false;
+                ctx.dashboard.reset_detail_position();
+            } else {
+                ctx.dashboard.show_detail = true;
+                ctx.dashboard.detail_mode = DetailMode::Auto;
+                ctx.dashboard.reset_detail_position();
+            }
+        }
+        KeyCode::Tab if ctx.dashboard.show_detail => {
+            ctx.dashboard.cycle_detail_mode();
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.detail_prev();
+            } else {
+                ctx.dashboard.navigate(Direction::Left);
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.detail_next();
+            } else {
+                ctx.dashboard.navigate(Direction::Right);
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.move_detail_focus(-1);
+            } else {
+                ctx.dashboard.navigate(Direction::Up);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.move_detail_focus(1);
+            } else {
+                ctx.dashboard.navigate(Direction::Down);
+            }
+        }
+        KeyCode::PageUp => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.scroll_detail(-20);
+            } else {
+                ctx.dashboard.page_up();
+            }
+        }
+        KeyCode::PageDown => {
+            if ctx.dashboard.show_detail {
+                ctx.dashboard.scroll_detail(20);
+            } else {
+                ctx.dashboard.page_down();
+            }
+        }
+        _ => {}
+    }
+
+    TuiLoopAction::Continue
+}
+
 fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
     let mut config = config;
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -1036,171 +1233,20 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         fetches.refresh_due(&rt, &kinds, &config, cached, &auth_ready, &mut dashboard);
 
         if crossterm::event::poll(tick)? {
-            match crossterm::event::read()? {
-                Event::Mouse(me) => match me.kind {
-                    MouseEventKind::ScrollDown => {
-                        if dashboard.show_detail {
-                            dashboard.scroll_detail(3);
-                        } else {
-                            dashboard.navigate(Direction::Down);
-                        }
-                    }
-                    MouseEventKind::ScrollUp => {
-                        if dashboard.show_detail {
-                            dashboard.scroll_detail(-3);
-                        } else {
-                            dashboard.navigate(Direction::Up);
-                        }
-                    }
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        match dashboard.hit_test(me.column, me.row) {
-                            Some(HitResult::Refresh) => {
-                                fetches.refresh_all_fetchable(
-                                    &rt,
-                                    &kinds,
-                                    &config,
-                                    &auth_ready,
-                                    &mut dashboard,
-                                );
-                            }
-                            Some(HitResult::AutoRefreshToggle) => {
-                                dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
-                            }
-                            Some(HitResult::Quit) => return Ok(()),
-                            Some(HitResult::Card(vpos)) => {
-                                if dashboard.selected_index == vpos && !dashboard.show_detail {
-                                    // Second click on already-selected card → open detail.
-                                    dashboard.show_detail = true;
-                                    dashboard.detail_mode = DetailMode::Auto;
-                                    dashboard.reset_detail_position();
-                                } else {
-                                    dashboard.selected_index = vpos;
-                                    dashboard.show_detail = false;
-                                }
-                            }
-                            None => {}
-                        }
-                    }
-                    MouseEventKind::Moved => {
-                        dashboard.set_mouse_pos(me.column, me.row);
-                    }
-                    _ => {}
+            let action = handle_tui_event(
+                crossterm::event::read()?,
+                TuiEventContext {
+                    rt: &rt,
+                    kinds: &kinds,
+                    auth_ready: &auth_ready,
+                    config: &mut config,
+                    dashboard: &mut dashboard,
+                    fetches: &mut fetches,
                 },
-                Event::Key(KeyEvent { code, .. }) => match code {
-                    KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                    KeyCode::Esc | KeyCode::Backspace if dashboard.show_detail => {
-                        dashboard.show_detail = false;
-                    }
-                    KeyCode::Char('r') | KeyCode::Char('R') => {
-                        fetches.refresh_all_fetchable(
-                            &rt,
-                            &kinds,
-                            &config,
-                            &auth_ready,
-                            &mut dashboard,
-                        );
-                    }
-                    KeyCode::Char('c') | KeyCode::Char('C') => {
-                        if let Some(selected) = dashboard.selected_provider() {
-                            if let Ok(json) = serde_json::to_string_pretty(selected) {
-                                if let Ok(mut ctx) = arboard::Clipboard::new() {
-                                    let _ = ctx.set_text(&json);
-                                }
-                            }
-                        }
-                    }
-                    KeyCode::Char('f') | KeyCode::Char('F') if dashboard.show_detail => {
-                        if let Some(provider) = dashboard.selected_provider_slug() {
-                            if let Some(row) = dashboard.selected_detail_row() {
-                                config.toggle_quota_favorite(&provider, &row.quota_key);
-                                let prefs = config.quota_preferences_for(&provider);
-                                dashboard.set_quota_preferences(&provider, prefs);
-                            } else {
-                                config.toggle_provider_favorite(&provider);
-                                dashboard.toggle_selected_provider_favorite();
-                            }
-                            let _ = config.save();
-                        }
-                    }
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        if let Some(provider) = dashboard.toggle_selected_provider_favorite() {
-                            config.toggle_provider_favorite(&provider);
-                            let _ = config.save();
-                        }
-                    }
-                    KeyCode::Char('x') | KeyCode::Char('X') if dashboard.show_detail => {
-                        if let Some(provider) = dashboard.selected_provider_slug() {
-                            if let Some(row) = dashboard.selected_detail_row() {
-                                config.toggle_quota_hidden(&provider, &row.quota_key);
-                                let prefs = config.quota_preferences_for(&provider);
-                                dashboard.set_quota_preferences(&provider, prefs);
-                                dashboard.move_detail_focus(0);
-                                let _ = config.save();
-                            }
-                        }
-                    }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
-                        dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
-                    }
-                    KeyCode::Enter => {
-                        if dashboard.show_detail {
-                            dashboard.show_detail = false;
-                            dashboard.reset_detail_position();
-                        } else {
-                            dashboard.show_detail = true;
-                            dashboard.detail_mode = DetailMode::Auto;
-                            dashboard.reset_detail_position();
-                        }
-                    }
-                    KeyCode::Tab if dashboard.show_detail => {
-                        dashboard.cycle_detail_mode();
-                    }
-                    KeyCode::Left | KeyCode::Char('h') => {
-                        if dashboard.show_detail {
-                            dashboard.detail_prev();
-                        } else {
-                            dashboard.navigate(Direction::Left);
-                        }
-                    }
-                    KeyCode::Right | KeyCode::Char('l') => {
-                        if dashboard.show_detail {
-                            dashboard.detail_next();
-                        } else {
-                            dashboard.navigate(Direction::Right);
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if dashboard.show_detail {
-                            dashboard.move_detail_focus(-1);
-                        } else {
-                            dashboard.navigate(Direction::Up);
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if dashboard.show_detail {
-                            dashboard.move_detail_focus(1);
-                        } else {
-                            dashboard.navigate(Direction::Down);
-                        }
-                    }
-                    KeyCode::PageUp => {
-                        if dashboard.show_detail {
-                            dashboard.scroll_detail(-20);
-                        } else {
-                            dashboard.page_up();
-                        }
-                    }
-                    KeyCode::PageDown => {
-                        if dashboard.show_detail {
-                            dashboard.scroll_detail(20);
-                        } else {
-                            dashboard.page_down();
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            } // end outer match crossterm::event::read()
+            );
+            if action == TuiLoopAction::Quit {
+                return Ok(());
+            }
         } else if !dashboard.all_loaded() {
             dashboard.tick_spinner();
         }
