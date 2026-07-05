@@ -548,23 +548,195 @@ fn fetch_with_staleness_check(kinds: Vec<ProviderKind>, config: &Config) -> Vec<
     results
 }
 
-/// Spawn fetches only for the specified provider indices.
-fn spawn_fetches_for(
-    rt: &tokio::runtime::Runtime,
-    kinds: &[ProviderKind],
-    indices: &[usize],
-    config: Config,
-    tx: tokio::sync::mpsc::UnboundedSender<(usize, ProviderResult)>,
-) {
-    for &idx in indices {
-        let kind = kinds[idx];
-        let tx = tx.clone();
-        let config = config.clone();
-        rt.spawn(async move {
-            let result = fetch_one(kind, &config).await;
-            let _ = tx.send((idx, result));
-        });
+type FetchMessage = (usize, ProviderResult);
+type FetchReceiver = tokio::sync::mpsc::UnboundedReceiver<FetchMessage>;
+type FetchSender = tokio::sync::mpsc::UnboundedSender<FetchMessage>;
+
+struct TuiFetchController {
+    tx: FetchSender,
+    rx: FetchReceiver,
+    last_refresh: Vec<Instant>,
+}
+
+impl TuiFetchController {
+    fn new(
+        kinds: &[ProviderKind],
+        disk_cache: &cache::CacheFile,
+        now: chrono::DateTime<chrono::Utc>,
+        startup_fetch_indices: &[usize],
+        refresh_on_start: bool,
+    ) -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let last_refresh = initial_last_refresh(
+            kinds,
+            disk_cache,
+            now,
+            startup_fetch_indices,
+            refresh_on_start,
+        );
+        Self {
+            tx,
+            rx,
+            last_refresh,
+        }
     }
+
+    fn spawn_startup(
+        &self,
+        rt: &tokio::runtime::Runtime,
+        kinds: &[ProviderKind],
+        indices: &[usize],
+        config: &Config,
+    ) {
+        self.spawn_fetches(rt, kinds, indices, config);
+    }
+
+    fn drain_completed(&mut self, dashboard: &mut Dashboard) {
+        while let Ok((idx, result)) = self.rx.try_recv() {
+            cache::write_cache(std::slice::from_ref(&result));
+            dashboard.update(idx, result);
+            self.mark_finished(idx);
+        }
+    }
+
+    fn refresh_due(
+        &mut self,
+        rt: &tokio::runtime::Runtime,
+        kinds: &[ProviderKind],
+        config: &Config,
+        cached: bool,
+        auth_ready: &[bool],
+        dashboard: &mut Dashboard,
+    ) {
+        if !should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
+            return;
+        }
+
+        let elapsed: Vec<Duration> = self
+            .last_refresh
+            .iter()
+            .map(|instant| instant.elapsed())
+            .collect();
+        let entry_done: Vec<bool> = (0..kinds.len())
+            .map(|idx| dashboard.is_entry_done(idx))
+            .collect();
+        let targets = periodic_refresh_candidates(PeriodicRefreshState {
+            cached,
+            auto_refresh_enabled: dashboard.auto_refresh_enabled,
+            show_detail: dashboard.show_detail,
+            selected_entry: dashboard.selected_entry_index(),
+            kinds,
+            auth_ready,
+            entry_done: &entry_done,
+            elapsed: &elapsed,
+        });
+
+        self.refresh_indices(rt, kinds, &targets, config, dashboard);
+    }
+
+    fn refresh_all_fetchable(
+        &mut self,
+        rt: &tokio::runtime::Runtime,
+        kinds: &[ProviderKind],
+        config: &Config,
+        auth_ready: &[bool],
+        dashboard: &mut Dashboard,
+    ) {
+        self.replace_channel();
+        let fetchable = fetchable_indices(kinds.len(), auth_ready);
+        self.refresh_indices(rt, kinds, &fetchable, config, dashboard);
+    }
+
+    fn replace_channel(&mut self) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.tx = tx;
+        self.rx = rx;
+    }
+
+    fn refresh_indices(
+        &mut self,
+        rt: &tokio::runtime::Runtime,
+        kinds: &[ProviderKind],
+        indices: &[usize],
+        config: &Config,
+        dashboard: &mut Dashboard,
+    ) {
+        for &idx in indices {
+            dashboard.reset_one(idx);
+        }
+        self.spawn_fetches(rt, kinds, indices, config);
+        self.mark_started(indices);
+    }
+
+    fn spawn_fetches(
+        &self,
+        rt: &tokio::runtime::Runtime,
+        kinds: &[ProviderKind],
+        indices: &[usize],
+        config: &Config,
+    ) {
+        for &idx in indices {
+            let Some(&kind) = kinds.get(idx) else {
+                continue;
+            };
+            let tx = self.tx.clone();
+            let config = config.clone();
+            rt.spawn(async move {
+                let result = fetch_one(kind, &config).await;
+                let _ = tx.send((idx, result));
+            });
+        }
+    }
+
+    fn mark_started(&mut self, indices: &[usize]) {
+        for &idx in indices {
+            if let Some(last_refresh) = self.last_refresh.get_mut(idx) {
+                *last_refresh = Instant::now();
+            }
+        }
+    }
+
+    fn mark_finished(&mut self, idx: usize) {
+        if let Some(last_refresh) = self.last_refresh.get_mut(idx) {
+            *last_refresh = Instant::now();
+        }
+    }
+}
+
+fn initial_last_refresh(
+    kinds: &[ProviderKind],
+    disk_cache: &cache::CacheFile,
+    now: chrono::DateTime<chrono::Utc>,
+    startup_fetch_indices: &[usize],
+    refresh_on_start: bool,
+) -> Vec<Instant> {
+    let instant_now = Instant::now();
+    kinds
+        .iter()
+        .enumerate()
+        .map(|(idx, kind)| {
+            let startup_fetching = startup_fetch_indices.contains(&idx);
+            if startup_fetching {
+                instant_now
+            } else if should_backdate_refresh_timer(refresh_on_start, startup_fetching) {
+                if let Some(entry) = disk_cache.entries.get(kind.slug()) {
+                    let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
+                    let elapsed = Duration::from_secs(age_secs);
+                    instant_now.checked_sub(elapsed).unwrap_or(instant_now)
+                } else {
+                    instant_now
+                }
+            } else {
+                instant_now
+            }
+        })
+        .collect()
+}
+
+fn fetchable_indices(provider_count: usize, auth_ready: &[bool]) -> Vec<usize> {
+    (0..provider_count)
+        .filter(|&idx| auth_ready.get(idx).copied().unwrap_or(false))
+        .collect()
 }
 
 fn render_dashboard_text(dashboard: &Dashboard, width: u16, height: u16) -> String {
@@ -703,7 +875,7 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
 
     for (idx, kind) in kinds.iter().enumerate() {
         let key = kind.slug().to_string();
-        let has_creds = auth_resolvers[idx].have_credentials();
+        let has_creds = auth_ready[idx];
         let fetch_on_start = should_startup_fetch(cached, config.tui.refresh_on_start, has_creds);
 
         if cached {
@@ -790,83 +962,25 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let (mut cur_tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(usize, ProviderResult)>();
-    if !fetch_indices.is_empty() {
-        spawn_fetches_for(&rt, &kinds, &fetch_indices, config.clone(), cur_tx.clone());
-    }
-
-    // Per-provider last-refresh timestamps.  For entries we're about to fetch
-    // the timer starts now; for cached entries we back-date the timer so the
-    // auto-refresh interval fires at roughly the right time.
-    let mut last_refresh: Vec<Instant> = kinds
-        .iter()
-        .enumerate()
-        .map(|(idx, _)| {
-            if fetch_indices.contains(&idx) {
-                Instant::now()
-            } else if should_backdate_refresh_timer(
-                config.tui.refresh_on_start,
-                fetch_indices.contains(&idx),
-            ) {
-                if let Some(entry) = disk_cache.entries.get(kinds[idx].slug()) {
-                    let age_secs = (now - entry.cached_at).num_seconds().max(0) as u64;
-                    let elapsed = Duration::from_secs(age_secs);
-                    // Back-date so the next auto-refresh fires after the normal interval.
-                    Instant::now()
-                        .checked_sub(elapsed)
-                        .unwrap_or(Instant::now())
-                } else {
-                    Instant::now()
-                }
-            } else {
-                Instant::now()
-            }
-        })
-        .collect();
+    let mut fetches = TuiFetchController::new(
+        &kinds,
+        &disk_cache,
+        now,
+        &fetch_indices,
+        config.tui.refresh_on_start,
+    );
+    fetches.spawn_startup(&rt, &kinds, &fetch_indices, &config);
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
         terminal.draw(|f| dashboard.render(f))?;
 
-        while let Ok((idx, result)) = rx.try_recv() {
-            cache::write_cache(std::slice::from_ref(&result));
-            dashboard.update(idx, result);
-            last_refresh[idx] = Instant::now();
-        }
+        fetches.drain_completed(&mut dashboard);
 
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
         // Skip providers without credentials.
-        if should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
-            let elapsed: Vec<Duration> = last_refresh
-                .iter()
-                .map(|instant| instant.elapsed())
-                .collect();
-            let entry_done: Vec<bool> = (0..kinds.len())
-                .map(|idx| dashboard.is_entry_done(idx))
-                .collect();
-            let targets = periodic_refresh_candidates(PeriodicRefreshState {
-                cached,
-                auto_refresh_enabled: dashboard.auto_refresh_enabled,
-                show_detail: dashboard.show_detail,
-                selected_entry: dashboard.selected_entry_index(),
-                kinds: &kinds,
-                auth_ready: &auth_ready,
-                entry_done: &entry_done,
-                elapsed: &elapsed,
-            });
-            for idx in targets {
-                let kind = kinds[idx];
-                dashboard.reset_one(idx);
-                let tx2 = cur_tx.clone();
-                let config2 = config.clone();
-                rt.spawn(async move {
-                    let result = fetch_one(kind, &config2).await;
-                    let _ = tx2.send((idx, result));
-                });
-                last_refresh[idx] = Instant::now();
-            }
-        }
+        fetches.refresh_due(&rt, &kinds, &config, cached, &auth_ready, &mut dashboard);
 
         if crossterm::event::poll(tick)? {
             match crossterm::event::read()? {
@@ -888,25 +1002,13 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                     MouseEventKind::Down(MouseButton::Left) => {
                         match dashboard.hit_test(me.column, me.row) {
                             Some(HitResult::Refresh) => {
-                                let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
-                                rx = new_rx;
-                                cur_tx = new_tx;
-                                // Only fetch providers that have credentials.
-                                let fetchable: Vec<usize> =
-                                    (0..kinds.len()).filter(|&i| auth_ready[i]).collect();
-                                for &idx in &fetchable {
-                                    dashboard.reset_one(idx);
-                                }
-                                spawn_fetches_for(
+                                fetches.refresh_all_fetchable(
                                     &rt,
                                     &kinds,
-                                    &fetchable,
-                                    config.clone(),
-                                    cur_tx.clone(),
+                                    &config,
+                                    &auth_ready,
+                                    &mut dashboard,
                                 );
-                                for &idx in &fetchable {
-                                    last_refresh[idx] = Instant::now();
-                                }
                             }
                             Some(HitResult::AutoRefreshToggle) => {
                                 dashboard.auto_refresh_enabled = !dashboard.auto_refresh_enabled;
@@ -937,19 +1039,13 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         dashboard.show_detail = false;
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        let (new_tx, new_rx) = tokio::sync::mpsc::unbounded_channel();
-                        rx = new_rx;
-                        cur_tx = new_tx;
-                        // Only fetch providers that have credentials.
-                        let fetchable: Vec<usize> =
-                            (0..kinds.len()).filter(|&i| auth_ready[i]).collect();
-                        for &idx in &fetchable {
-                            dashboard.reset_one(idx);
-                        }
-                        spawn_fetches_for(&rt, &kinds, &fetchable, config.clone(), cur_tx.clone());
-                        for &idx in &fetchable {
-                            last_refresh[idx] = Instant::now();
-                        }
+                        fetches.refresh_all_fetchable(
+                            &rt,
+                            &kinds,
+                            &config,
+                            &auth_ready,
+                            &mut dashboard,
+                        );
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') => {
                         if let Some(selected) = dashboard.selected_provider() {
@@ -1257,6 +1353,11 @@ mod tests {
         assert!(should_periodic_refresh(false, true));
         assert!(!should_periodic_refresh(false, false));
         assert!(!should_periodic_refresh(true, true));
+    }
+
+    #[test]
+    fn manual_refresh_targets_only_authenticated_providers() {
+        assert_eq!(fetchable_indices(4, &[true, false, true]), vec![0, 2]);
     }
 
     #[test]
