@@ -250,8 +250,7 @@ impl MimoProvider {
                 kind: ProviderKind::Mimo,
                 status: ProviderStatus::Unavailable {
                     info: crate::providers::UnavailableInfo {
-                        reason: "No quota API — check usage at platform.xiaomimimo.com"
-                            .to_string(),
+                        reason: "No quota API — check usage at platform.xiaomimimo.com".to_string(),
                         console_url: Some(DASHBOARD_URL.into()),
                     },
                 },
@@ -614,8 +613,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mimo_full_fetch_bearer() {
-        let key = std::env::var("MIMO_API_KEY")
-            .expect("set MIMO_API_KEY for this test");
+        let key = std::env::var("MIMO_API_KEY").expect("set MIMO_API_KEY for this test");
         use crate::auth::{AuthCredential, ResolvedAuth};
         use crate::providers::Provider;
 
@@ -656,8 +654,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn mimo_full_fetch_cookie() {
-        let cookie = std::env::var("MIMO_COOKIE")
-            .expect("set MIMO_COOKIE for this test");
+        let cookie = std::env::var("MIMO_COOKIE").expect("set MIMO_COOKIE for this test");
         use crate::auth::{AuthCredential, ResolvedAuth};
         use crate::providers::Provider;
 

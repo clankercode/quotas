@@ -54,10 +54,7 @@ impl JsonOutput {
         let providers = results
             .into_iter()
             .map(|r| {
-                let cached_at = cache
-                    .entries
-                    .get(r.kind.slug())
-                    .map(|e| e.cached_at);
+                let cached_at = cache.entries.get(r.kind.slug()).map(|e| e.cached_at);
                 ProviderJson {
                     name: r.kind.display_name().to_lowercase(),
                     status: match r.status {

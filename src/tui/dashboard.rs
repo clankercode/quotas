@@ -381,9 +381,11 @@ impl Dashboard {
 
     pub fn set_provider_favorite(&mut self, provider: &str, favorite: bool) {
         if favorite {
-            self.favorite_providers.insert(provider.to_ascii_lowercase());
+            self.favorite_providers
+                .insert(provider.to_ascii_lowercase());
         } else {
-            self.favorite_providers.remove(&provider.to_ascii_lowercase());
+            self.favorite_providers
+                .remove(&provider.to_ascii_lowercase());
         }
     }
 
@@ -403,7 +405,8 @@ impl Dashboard {
     }
 
     pub fn is_provider_favorite(&self, provider: &str) -> bool {
-        self.favorite_providers.contains(&provider.to_ascii_lowercase())
+        self.favorite_providers
+            .contains(&provider.to_ascii_lowercase())
     }
 
     fn current_page(&self) -> usize {
@@ -1341,17 +1344,15 @@ impl Dashboard {
                 area.width,
                 area.height.saturating_sub(4),
             );
-            let text = view.render(
-                super::detail::DetailRenderOptions {
-                    width: detail_area.width,
-                    height: detail_area.height,
-                    mode: self.detail_mode,
-                    auto_refresh: self.auto_refresh_enabled,
-                    provider_favorite: self.is_provider_favorite(selected.kind.slug()),
-                    preferences: &quota_preferences,
-                    focused_row: Some(self.detail_focus),
-                },
-            );
+            let text = view.render(super::detail::DetailRenderOptions {
+                width: detail_area.width,
+                height: detail_area.height,
+                mode: self.detail_mode,
+                auto_refresh: self.auto_refresh_enabled,
+                provider_favorite: self.is_provider_favorite(selected.kind.slug()),
+                preferences: &quota_preferences,
+                focused_row: Some(self.detail_focus),
+            });
             let paragraph = Paragraph::new(text)
                 .block(Block::new().borders(Borders::NONE))
                 .wrap(Wrap { trim: false })
@@ -1860,7 +1861,11 @@ mod tests {
 
     #[test]
     fn favorite_providers_sort_first_in_visual_order() {
-        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let kinds = vec![
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::Gemini,
+        ];
         let entries = vec![
             ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
             ProviderEntry::Done(dummy_available_result(ProviderKind::Codex)),

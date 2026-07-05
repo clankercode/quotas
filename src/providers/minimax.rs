@@ -193,13 +193,15 @@ fn short_model_name(name: &str) -> String {
         .or_else(|| name.strip_prefix("minimax-"))
         .unwrap_or(name);
     let s = if s.starts_with("coding-plan-") {
-        s.strip_prefix("coding-plan-").map(|rest| format!("c-plan-{}", rest))
+        s.strip_prefix("coding-plan-")
+            .map(|rest| format!("c-plan-{}", rest))
     } else {
         None
     }
     .unwrap_or_else(|| s.to_string());
     let s = if s.starts_with("Hailuo-2.3-") {
-        s.strip_prefix("Hailou-2.3-").map(|rest| format!("H2.3-{}", rest))
+        s.strip_prefix("Hailou-2.3-")
+            .map(|rest| format!("H2.3-{}", rest))
     } else {
         None
     }

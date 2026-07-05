@@ -59,8 +59,7 @@ impl DetailView {
         let pct_w: u16 = 10; // room for " 100% used"
         let indent: u16 = 2;
         let gap: u16 = 1; // space between label and bar
-        let resolved_mode =
-            resolve_mode(options.mode, options.width, options.height, &self.result);
+        let resolved_mode = resolve_mode(options.mode, options.width, options.height, &self.result);
 
         // These are refined once we know the actual labels in the provider.
         let label_w: usize;
@@ -107,8 +106,7 @@ impl DetailView {
                         .iter()
                         .map(|w| bar::window_sort_key(w).0)
                         .collect();
-                    let show_headers =
-                        visible_windows.len() >= 3 && buckets_seen.len() >= 2;
+                    let show_headers = visible_windows.len() >= 3 && buckets_seen.len() >= 2;
 
                     // Compute label width from actual labels so we don't waste space.
                     label_w = visible_windows
@@ -121,7 +119,8 @@ impl DetailView {
                         .max()
                         .unwrap_or(12)
                         .clamp(8, 20);
-                    bar_width = options.width
+                    bar_width = options
+                        .width
                         .saturating_sub(indent + label_w as u16 + gap + pct_w)
                         .clamp(10, options.width.saturating_sub(indent + gap + pct_w));
 
@@ -139,17 +138,21 @@ impl DetailView {
                             }
                             last_bucket = Some(bucket);
                         }
-                        render_window(&mut lines, window, WindowRenderOptions {
-                            bar_width,
-                            label_w,
-                            show_headers,
-                            subrow_indent: subrow_indent.clone(),
-                            mode: resolved_mode,
-                            favorite: options.preferences.favorites.iter().any(|favorite| {
-                                favorite.eq_ignore_ascii_case(&window.window_type)
-                            }),
-                            focused: options.focused_row == Some(visible_idx),
-                        });
+                        render_window(
+                            &mut lines,
+                            window,
+                            WindowRenderOptions {
+                                bar_width,
+                                label_w,
+                                show_headers,
+                                subrow_indent: subrow_indent.clone(),
+                                mode: resolved_mode,
+                                favorite: options.preferences.favorites.iter().any(|favorite| {
+                                    favorite.eq_ignore_ascii_case(&window.window_type)
+                                }),
+                                focused: options.focused_row == Some(visible_idx),
+                            },
+                        );
                         if resolved_mode == ResolvedDetailMode::Normal {
                             lines.push(Line::from(""));
                         }
@@ -400,8 +403,11 @@ fn render_header_line(
 
     let total_width = width.saturating_sub(2) as usize;
     let freshness_width = freshness.chars().count();
-    let available = total_width.saturating_sub(freshness_width + usize::from(!freshness.is_empty()));
-    let provider_width = available.min(18).max(available.min(provider.chars().count().max(1)));
+    let available =
+        total_width.saturating_sub(freshness_width + usize::from(!freshness.is_empty()));
+    let provider_width = available
+        .min(18)
+        .max(available.min(provider.chars().count().max(1)));
     let plan_width = available.saturating_sub(provider_width + usize::from(!plan.is_empty()));
     let mut row = format!(
         "  {:<provider_width$}",
@@ -480,7 +486,8 @@ pub fn detail_row_keys(
 ) -> Vec<DetailRowKey> {
     match &result.status {
         ProviderStatus::Available { quota } => {
-            let (visible, hidden) = partition_windows(&quota.windows, preferences, show_all_windows);
+            let (visible, hidden) =
+                partition_windows(&quota.windows, preferences, show_all_windows);
             visible
                 .into_iter()
                 .map(|window| DetailRowKey {
@@ -612,17 +619,15 @@ mod tests {
         let view = DetailView::new(result);
         terminal
             .draw(|f| {
-                let text = view.render(
-                    DetailRenderOptions {
-                        width,
-                        height,
-                        mode: DetailMode::Auto,
-                        auto_refresh: true,
-                        provider_favorite: false,
-                        preferences: &QuotaPreferences::default(),
-                        focused_row: None,
-                    },
-                );
+                let text = view.render(DetailRenderOptions {
+                    width,
+                    height,
+                    mode: DetailMode::Auto,
+                    auto_refresh: true,
+                    provider_favorite: false,
+                    preferences: &QuotaPreferences::default(),
+                    focused_row: None,
+                });
                 f.render_widget(Paragraph::new(text), f.area());
             })
             .unwrap();
@@ -709,12 +714,11 @@ mod tests {
         assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
         assert!(lines.get(1).is_some_and(|line| line.contains("Updated")));
         assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
-        assert!(lines.get(2).is_some_and(|line| line.contains("auth: oauth")));
+        assert!(lines
+            .get(2)
+            .is_some_and(|line| line.contains("auth: oauth")));
         assert!(
-            lines
-                .iter()
-                .take(4)
-                .any(|line| line.contains("Gemini API")),
+            lines.iter().take(4).any(|line| line.contains("Gemini API")),
             "expected plan name near the header"
         );
     }

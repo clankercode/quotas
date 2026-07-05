@@ -99,11 +99,11 @@ pub(crate) fn parse_user(body: &serde_json::Value) -> ProviderQuota {
         .and_then(|d| d.and_hms_opt(0, 0, 0))
         .map(|dt| Utc.from_utc_datetime(&dt));
 
-    let snapshots = body
-        .get("quota_snapshots")
+    let snapshots = body.get("quota_snapshots").cloned().unwrap_or_default();
+    let premium = snapshots
+        .get("premium_interactions")
         .cloned()
         .unwrap_or_default();
-    let premium = snapshots.get("premium_interactions").cloned().unwrap_or_default();
 
     let unlimited = premium
         .get("unlimited")
@@ -125,7 +125,10 @@ pub(crate) fn parse_user(body: &serde_json::Value) -> ProviderQuota {
         let used = (limit - remaining).max(0);
         // Full calendar-month window: reset_at minus 1 month = period start.
         let period_seconds = reset_at
-            .and_then(|r| r.checked_sub_months(Months::new(1)).map(|s| (r - s).num_seconds()))
+            .and_then(|r| {
+                r.checked_sub_months(Months::new(1))
+                    .map(|s| (r - s).num_seconds())
+            })
             .filter(|s| *s > 0);
         windows.push(QuotaWindow {
             window_type: "monthly".to_string(),

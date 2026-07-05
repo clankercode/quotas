@@ -1,6 +1,6 @@
+pub mod cursor;
 pub mod env;
 pub mod file;
-pub mod cursor;
 pub mod oauth;
 pub mod opencode;
 pub mod refresh;
@@ -130,19 +130,13 @@ mod tests {
 
     #[test]
     fn multi_resolver_have_credentials_true_if_any() {
-        let mr = MultiResolver::new(vec![
-            Box::new(NeverHaveCreds),
-            Box::new(AlwaysHaveCreds),
-        ]);
+        let mr = MultiResolver::new(vec![Box::new(NeverHaveCreds), Box::new(AlwaysHaveCreds)]);
         assert!(mr.have_credentials());
     }
 
     #[test]
     fn multi_resolver_have_credentials_false_if_none() {
-        let mr = MultiResolver::new(vec![
-            Box::new(NeverHaveCreds),
-            Box::new(NeverHaveCreds),
-        ]);
+        let mr = MultiResolver::new(vec![Box::new(NeverHaveCreds), Box::new(NeverHaveCreds)]);
         assert!(!mr.have_credentials());
     }
 

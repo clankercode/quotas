@@ -472,10 +472,8 @@ mod tests {
         std::env::remove_var("GOOGLE_CLOUD_PROJECT");
         std::env::remove_var("GOOGLE_CLOUD_PROJECT_ID");
 
-        let temp_root = std::env::temp_dir().join(format!(
-            "quotas-gemini-project-slug-{}",
-            std::process::id()
-        ));
+        let temp_root =
+            std::env::temp_dir().join(format!("quotas-gemini-project-slug-{}", std::process::id()));
         let workspace = temp_root.join("Workspace One");
         let gemini_home = temp_root.join("gemini-home");
         std::fs::create_dir_all(&workspace).unwrap();

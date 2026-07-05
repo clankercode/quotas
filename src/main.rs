@@ -393,9 +393,9 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
         ProviderKind::Mimo => Box::new(quotas::providers::mimo::MimoProvider::new(auth)),
-        ProviderKind::GitHubCopilot => Box::new(
-            quotas::providers::github_copilot::GitHubCopilotProvider::new(auth),
-        ),
+        ProviderKind::GitHubCopilot => {
+            Box::new(quotas::providers::github_copilot::GitHubCopilotProvider::new(auth))
+        }
     };
     // Pre-resolve to capture the auth source string for the detail view.
     // This is a lightweight re-resolve (env var / file read) after any token
@@ -687,8 +687,10 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     // Read cache and build auth resolvers for credential pre-checking.
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
-    let auth_resolvers: Vec<Box<dyn AuthResolver>> =
-        kinds.iter().map(|k| build_auth_resolver(k, &config)).collect();
+    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
+        .iter()
+        .map(|k| build_auth_resolver(k, &config))
+        .collect();
     let auth_ready: Vec<bool> = auth_resolvers
         .iter()
         .map(|resolver| resolver.have_credentials())
@@ -836,8 +838,13 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         // Claude uses a longer interval to avoid rate-limiting.
         // Skip providers without credentials.
         if should_periodic_refresh(cached, dashboard.auto_refresh_enabled) {
-            let elapsed: Vec<Duration> = last_refresh.iter().map(|instant| instant.elapsed()).collect();
-            let entry_done: Vec<bool> = (0..kinds.len()).map(|idx| dashboard.is_entry_done(idx)).collect();
+            let elapsed: Vec<Duration> = last_refresh
+                .iter()
+                .map(|instant| instant.elapsed())
+                .collect();
+            let entry_done: Vec<bool> = (0..kinds.len())
+                .map(|idx| dashboard.is_entry_done(idx))
+                .collect();
             let targets = periodic_refresh_candidates(PeriodicRefreshState {
                 cached,
                 auto_refresh_enabled: dashboard.auto_refresh_enabled,
@@ -885,9 +892,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                                 rx = new_rx;
                                 cur_tx = new_tx;
                                 // Only fetch providers that have credentials.
-                                let fetchable: Vec<usize> = (0..kinds.len())
-                                    .filter(|&i| auth_ready[i])
-                                    .collect();
+                                let fetchable: Vec<usize> =
+                                    (0..kinds.len()).filter(|&i| auth_ready[i]).collect();
                                 for &idx in &fetchable {
                                     dashboard.reset_one(idx);
                                 }
@@ -935,9 +941,8 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
                         rx = new_rx;
                         cur_tx = new_tx;
                         // Only fetch providers that have credentials.
-                        let fetchable: Vec<usize> = (0..kinds.len())
-                            .filter(|&i| auth_ready[i])
-                            .collect();
+                        let fetchable: Vec<usize> =
+                            (0..kinds.len()).filter(|&i| auth_ready[i]).collect();
                         for &idx in &fetchable {
                             dashboard.reset_one(idx);
                         }
@@ -1256,7 +1261,11 @@ mod tests {
 
     #[test]
     fn periodic_refresh_targets_only_selected_provider_in_detail_view() {
-        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let kinds = vec![
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::Gemini,
+        ];
         let auth_ready = vec![true, true, true];
         let entry_done = vec![true, true, true];
         let elapsed = vec![
@@ -1281,7 +1290,11 @@ mod tests {
 
     #[test]
     fn periodic_refresh_targets_all_due_providers_on_dashboard() {
-        let kinds = vec![ProviderKind::Claude, ProviderKind::Codex, ProviderKind::Gemini];
+        let kinds = vec![
+            ProviderKind::Claude,
+            ProviderKind::Codex,
+            ProviderKind::Gemini,
+        ];
         let auth_ready = vec![true, true, false];
         let entry_done = vec![true, true, true];
         let elapsed = vec![

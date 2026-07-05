@@ -27,7 +27,10 @@ impl CursorProvider {
                 .header("Content-Type", "application/json")
                 .header("Origin", "https://cursor.com")
                 .header("Referer", "https://cursor.com/dashboard/spending")
-                .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36")
+                .header(
+                    "User-Agent",
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                )
                 .header("Cookie", format!("WorkosCursorSessionToken={}", token))
                 .body(serde_json::to_string(&body).unwrap())
                 .send()
@@ -171,7 +174,10 @@ struct SpendLimitUsage {
     individual_remaining: Option<i64>,
 }
 
-fn parse_quota(plan_body: &serde_json::Value, usage_body: &serde_json::Value) -> Result<ProviderQuota> {
+fn parse_quota(
+    plan_body: &serde_json::Value,
+    usage_body: &serde_json::Value,
+) -> Result<ProviderQuota> {
     let plan: PlanInfoResponse = serde_json::from_value(plan_body.clone())
         .map_err(|e| crate::Error::Provider(format!("parse plan error: {}", e)))?;
     let usage: UsageResponse = serde_json::from_value(usage_body.clone())
@@ -190,10 +196,9 @@ fn parse_quota(plan_body: &serde_json::Value, usage_body: &serde_json::Value) ->
 
         // Parse billing cycle end as timestamp
         let reset_at = usage.billing_cycle_end.and_then(|ts| {
-            ts.parse::<i64>().ok().map(|ms| {
-                DateTime::from_timestamp(ms / 1000, 0)
-                    .unwrap_or_else(Utc::now)
-            })
+            ts.parse::<i64>()
+                .ok()
+                .map(|ms| DateTime::from_timestamp(ms / 1000, 0).unwrap_or_else(Utc::now))
         });
 
         windows.push(QuotaWindow {
@@ -220,7 +225,10 @@ fn parse_quota(plan_body: &serde_json::Value, usage_body: &serde_json::Value) ->
 
     // Spend limit usage window
     if let Some(spend_limit) = &usage.spend_limit_usage {
-        if let (Some(limit), Some(remaining)) = (spend_limit.individual_limit, spend_limit.individual_remaining) {
+        if let (Some(limit), Some(remaining)) = (
+            spend_limit.individual_limit,
+            spend_limit.individual_remaining,
+        ) {
             let used = limit.saturating_sub(remaining);
             windows.push(QuotaWindow {
                 window_type: "spend_limit".to_string(),
@@ -257,7 +265,8 @@ fn parse_quota(plan_body: &serde_json::Value, usage_body: &serde_json::Value) ->
         }
     }
 
-    let plan_name = plan.plan_info
+    let plan_name = plan
+        .plan_info
         .as_ref()
         .and_then(|p| p.plan_name.clone())
         .unwrap_or_else(|| "Cursor".to_string());

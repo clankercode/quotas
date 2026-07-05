@@ -100,8 +100,12 @@ impl Config {
         use crate::providers::ProviderKind;
         let all = ProviderKind::all();
         // Normalize config values once for comparison
-        let disabled_lower: Vec<String> =
-            self.providers.disabled.iter().map(|s| s.to_lowercase()).collect();
+        let disabled_lower: Vec<String> = self
+            .providers
+            .disabled
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect();
         if self.providers.enabled.iter().any(|e| e == "*") {
             all.iter()
                 .filter(|k| {
@@ -111,8 +115,12 @@ impl Config {
                 .copied()
                 .collect()
         } else {
-            let enabled_lower: Vec<String> =
-                self.providers.enabled.iter().map(|s| s.to_lowercase()).collect();
+            let enabled_lower: Vec<String> = self
+                .providers
+                .enabled
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect();
             all.iter()
                 .filter(|k| enabled_lower.iter().any(|e| e == k.slug()))
                 .copied()
@@ -231,7 +239,8 @@ impl Config {
             .or_default();
         toggle_value(&mut prefs.favorites, quota_key);
         if prefs.favorites.is_empty() && prefs.hidden.is_empty() {
-            self.quota_preferences.remove(&provider.to_ascii_lowercase());
+            self.quota_preferences
+                .remove(&provider.to_ascii_lowercase());
         }
     }
 
@@ -242,13 +251,16 @@ impl Config {
             .or_default();
         toggle_value(&mut prefs.hidden, quota_key);
         if prefs.favorites.is_empty() && prefs.hidden.is_empty() {
-            self.quota_preferences.remove(&provider.to_ascii_lowercase());
+            self.quota_preferences
+                .remove(&provider.to_ascii_lowercase());
         }
     }
 }
 
 fn contains_case_insensitive(values: &[String], needle: &str) -> bool {
-    values.iter().any(|value| value.eq_ignore_ascii_case(needle))
+    values
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case(needle))
 }
 
 fn toggle_value(values: &mut Vec<String>, needle: &str) {
