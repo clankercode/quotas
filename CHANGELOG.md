@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 - 2026-07-07
+
+- Fixed statusline summaries so Claude shows the most constrained quota window, including active weekly Fable limits, instead of always reporting the first finite window.
+- Refreshed Cargo dependencies to their latest compatible versions.
+
 ## 0.8.1 - 2026-07-06
 
 - Added generic Claude subscription support for model-specific weekly limits reported either as top-level `seven_day_<model>` fields or scoped `limits[]` entries, including Fable.
