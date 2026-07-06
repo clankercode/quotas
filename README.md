@@ -68,6 +68,8 @@ hidden = ["o3/weekly"]            # hidden quotas stay collapsed in detail view
 quotas --json                          # all providers
 quotas --json --pretty                 # pretty-printed
 quotas --json --provider=claude,codex  # filter by provider
+quotas --version                       # print installed version
+quotas --check-update                  # check crates.io for a newer release
 ```
 
 ### Statusline (shell prompt)
@@ -79,9 +81,12 @@ quotas --statusline --provider=claude  #   claude 80/100
 quotas --statusline --format='%provider: %remaining/%limit (%window)'
 ```
 
-Statusline reads from a local cache (`$XDG_CACHE_HOME/quotas/cache.json`),
-so it's instant with no network call. If the cache is older than 30 minutes,
-it forks a background refresh automatically.
+Statusline reads from local caches (`$XDG_CACHE_HOME/quotas/cache.json` and
+`$XDG_CACHE_HOME/quotas/update.json`), so it's instant with no foreground
+network call. If the provider cache is older than 30 minutes, it forks a
+background quota refresh automatically. If the update cache is older than 24
+hours, it forks a background crates.io version check; pass `--no-update-check`
+to disable that.
 
 Shell integration examples:
 

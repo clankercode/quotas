@@ -24,6 +24,7 @@ use quotas::tui::DetailMode;
 use quotas::tui::Direction;
 use quotas::tui::HitResult;
 use quotas::tui::ProviderEntry;
+use quotas::update;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
@@ -32,6 +33,7 @@ use std::time::{Duration, Instant};
 
 #[derive(Parser, Debug)]
 #[command(name = "quotas")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Check AI provider usage quotas from your configured credentials", long_about = None)]
 struct Args {
     #[arg(long)]
@@ -59,6 +61,14 @@ struct Args {
     #[arg(long)]
     no_bg_refresh: bool,
 
+    /// Check crates.io for a newer quotas release and exit.
+    #[arg(long)]
+    check_update: bool,
+
+    /// Disable automatic background crates.io update checks.
+    #[arg(long)]
+    no_update_check: bool,
+
     /// Read exclusively from cache — disables all automatic refreshes.
     /// Manual refresh (R key in TUI, refresh button) remains available.
     #[arg(long)]
@@ -78,6 +88,10 @@ struct Args {
     /// Hidden: fetch all providers, merge into cache, exit silently.
     #[arg(long, hide = true)]
     update_cache: bool,
+
+    /// Hidden: refresh the crates.io version cache and exit silently.
+    #[arg(long, hide = true)]
+    update_version_cache: bool,
 
     #[arg(long, value_delimiter = ',')]
     provider: Vec<String>,
@@ -449,6 +463,13 @@ fn periodic_refresh_candidates(state: PeriodicRefreshState<'_>) -> Vec<usize> {
 
 fn should_backdate_refresh_timer(refresh_on_start: bool, startup_fetching: bool) -> bool {
     refresh_on_start && !startup_fetching
+}
+
+fn refresh_update_cache_sync() -> quotas::Result<update::UpdateInfo> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(update::refresh_update_cache(env!("CARGO_PKG_VERSION")))
 }
 
 fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
@@ -1123,7 +1144,12 @@ fn handle_key_event(code: KeyCode, ctx: TuiEventContext<'_>) -> TuiLoopAction {
     TuiLoopAction::Continue
 }
 
-fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result<()> {
+fn run_tui(
+    kinds: Vec<ProviderKind>,
+    config: Config,
+    cached: bool,
+    update_check_enabled: bool,
+) -> io::Result<()> {
     let mut config = config;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1140,6 +1166,19 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
     } = build_tui_startup_plan(&kinds, &config, &disk_cache, now, cached);
 
     let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
+    dashboard.set_update_info(update::cached_update_info(env!("CARGO_PKG_VERSION")));
+    let mut update_rx = None;
+    if update_check_enabled && !cached && update::should_check_for_update(now) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        update_rx = Some(rx);
+        rt.spawn(async move {
+            let info = update::refresh_update_cache(env!("CARGO_PKG_VERSION"))
+                .await
+                .ok()
+                .filter(|info| info.is_update_available());
+            let _ = tx.send(info);
+        });
+    }
     apply_dashboard_config(&mut dashboard, &config);
 
     enable_raw_mode()?;
@@ -1162,6 +1201,12 @@ fn run_tui(kinds: Vec<ProviderKind>, config: Config, cached: bool) -> io::Result
         terminal.draw(|f| dashboard.render(f))?;
 
         fetches.drain_completed(&mut dashboard);
+        if let Some(rx) = &update_rx {
+            if let Ok(info) = rx.try_recv() {
+                dashboard.set_update_info(info);
+                update_rx = None;
+            }
+        }
 
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
@@ -1206,6 +1251,24 @@ fn main() {
     // Hidden: fetch + write cache, exit silently (used by background refresh).
     if args.update_cache {
         let _ = fetch_all(kinds, &config);
+        return;
+    }
+
+    // Hidden: refresh crates.io update cache, exit silently.
+    if args.update_version_cache {
+        let _ = refresh_update_cache_sync();
+        return;
+    }
+
+    if args.check_update {
+        match refresh_update_cache_sync() {
+            Ok(info) if info.is_update_available() => println!("{}", info.summary()),
+            Ok(info) => println!("quotas {} is current", info.current_version),
+            Err(e) => {
+                eprintln!("update check failed: {e}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -1277,7 +1340,7 @@ fn main() {
         return;
     }
 
-    if let Err(e) = run_tui(kinds.clone(), config, args.cached) {
+    if let Err(e) = run_tui(kinds.clone(), config, args.cached, !args.no_update_check) {
         eprintln!("Error: {:?}", e);
     }
 }
@@ -1295,6 +1358,7 @@ fn run_statusline(args: &Args, config: &Config) {
         },
         providers: filter_kinds(&args.provider, config, args.cached),
         format: args.format.clone(),
+        update_info: update::cached_update_info(env!("CARGO_PKG_VERSION")),
     };
 
     let line = statusline::render(&cache, &sl_config);
@@ -1316,12 +1380,27 @@ fn run_statusline(args: &Args, config: &Config) {
             }
         }
     }
+
+    if !args.no_update_check && !args.cached && update::should_check_for_update(chrono::Utc::now())
+    {
+        let _ = spawn_bg_version_check();
+    }
 }
 
 fn spawn_bg_refresh() -> io::Result<()> {
+    spawn_detached(&["--update-cache"])
+}
+
+fn spawn_bg_version_check() -> io::Result<()> {
+    spawn_detached(&["--update-version-cache"])
+}
+
+fn spawn_detached(args: &[&str]) -> io::Result<()> {
     let self_exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(self_exe);
-    cmd.arg("--update-cache");
+    for arg in args {
+        cmd.arg(arg);
+    }
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(std::process::Stdio::null());

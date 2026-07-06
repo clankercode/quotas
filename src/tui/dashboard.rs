@@ -2,6 +2,7 @@ use super::bar;
 use super::detail::{detail_row_keys, DetailMode, DetailView};
 use crate::config::QuotaPreferences;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
+use crate::update::UpdateInfo;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -61,6 +62,7 @@ pub struct Dashboard {
     pub show_all_windows: bool,
     pub vertical_spanning: bool,
     pub auto_refresh_enabled: bool,
+    pub update_info: Option<UpdateInfo>,
     favorite_providers: BTreeSet<String>,
     quota_preferences: std::collections::BTreeMap<String, QuotaPreferences>,
     last_layout: Cell<GridLayout>,
@@ -92,6 +94,7 @@ impl Dashboard {
             show_all_windows: false,
             vertical_spanning: false,
             auto_refresh_enabled: true,
+            update_info: None,
             favorite_providers: BTreeSet::new(),
             quota_preferences: std::collections::BTreeMap::new(),
             last_layout: Cell::new(GridLayout::default()),
@@ -121,6 +124,7 @@ impl Dashboard {
             show_all_windows: false,
             vertical_spanning: false,
             auto_refresh_enabled: true,
+            update_info: None,
             favorite_providers: BTreeSet::new(),
             quota_preferences: std::collections::BTreeMap::new(),
             last_layout: Cell::new(GridLayout::default()),
@@ -135,6 +139,10 @@ impl Dashboard {
             dashboard.stable_order = dashboard.compute_visual_order();
         }
         dashboard
+    }
+
+    pub fn set_update_info(&mut self, update_info: Option<UpdateInfo>) {
+        self.update_info = update_info.filter(|info| info.is_update_available());
     }
 
     /// Update the last-known mouse position (used for button hover styling).
@@ -811,7 +819,7 @@ impl Dashboard {
         f.render_widget(title, title_area);
 
         let loaded = total.saturating_sub(loading_count);
-        let footer_text = if unconfigured.is_empty() {
+        let mut footer_text = if unconfigured.is_empty() {
             format!("{} of {} providers loaded", loaded, total)
         } else {
             format!(
@@ -821,6 +829,9 @@ impl Dashboard {
                 unconfigured.join(", ")
             )
         };
+        if let Some(update) = &self.update_info {
+            footer_text.push_str(&format!("  ·  Update: {}", update.latest_version));
+        }
         let footer = Paragraph::new(footer_text).style(Style::new().dim());
         f.render_widget(footer, footer_area);
 

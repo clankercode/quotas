@@ -1,5 +1,6 @@
 use crate::cache::CacheFile;
 use crate::providers::{ProviderKind, ProviderResult, ProviderStatus, QuotaWindow};
+use crate::update::UpdateInfo;
 use std::collections::BTreeSet;
 
 /// Nerd Font icons for each provider status.
@@ -11,6 +12,7 @@ pub struct StatusLineConfig {
     pub icons: bool,
     pub providers: Vec<ProviderKind>,
     pub format: Option<String>,
+    pub update_info: Option<UpdateInfo>,
 }
 
 impl Default for StatusLineConfig {
@@ -19,6 +21,7 @@ impl Default for StatusLineConfig {
             icons: true,
             providers: vec![],
             format: None,
+            update_info: None,
         }
     }
 }
@@ -43,6 +46,12 @@ pub fn render(cache: &CacheFile, config: &StatusLineConfig) -> String {
 
         if let Some(segment) = format_result(&entry.result, format, config.icons) {
             parts.push(segment);
+        }
+    }
+
+    if let Some(update) = &config.update_info {
+        if update.is_update_available() {
+            parts.push(format!("update {}", update.latest_version));
         }
     }
 
@@ -233,6 +242,23 @@ mod tests {
     }
 
     #[test]
+    fn appends_update_hint_when_newer_version_is_cached() {
+        let cache = CacheFile::default();
+        let config = StatusLineConfig {
+            icons: false,
+            update_info: Some(UpdateInfo {
+                current_version: "0.8.1".into(),
+                latest_version: "0.8.2".into(),
+                checked_at: Utc::now(),
+            }),
+            ..Default::default()
+        };
+
+        let out = render(&cache, &config);
+        assert_eq!(out, "update 0.8.2");
+    }
+
+    #[test]
     fn provider_filter() {
         let mut cache = CacheFile::default();
         cache.entries.insert(
@@ -253,6 +279,7 @@ mod tests {
             icons: false,
             providers: vec![ProviderKind::Claude],
             format: None,
+            update_info: None,
         };
         let out = render(&cache, &config);
         assert!(out.contains("Claude"));

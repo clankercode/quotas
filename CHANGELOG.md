@@ -5,6 +5,7 @@
 - Added generic Claude subscription support for model-specific weekly limits reported either as top-level `seven_day_<model>` fields or scoped `limits[]` entries, including Fable.
 - Improved quota labels so generic weekly model limits render cleanly in compact and sectioned TUI layouts.
 - Documented Claude model-specific weekly quota windows in the README.
+- Added `--version`, `--check-update`, and cached background crates.io update detection for the TUI/statusline.
 
 ## 0.8.0 - 2026-04-17
 
