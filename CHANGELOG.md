@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3 - 2026-07-07
+
+- Added a subtle colored TUI footer notice when the background startup update check finds a newer release.
+
 ## 0.8.2 - 2026-07-07
 
 - Fixed statusline summaries so Claude shows the most constrained quota window, including active weekly Fable limits, instead of always reporting the first finite window.

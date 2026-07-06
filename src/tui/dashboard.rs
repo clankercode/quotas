@@ -819,20 +819,12 @@ impl Dashboard {
         f.render_widget(title, title_area);
 
         let loaded = total.saturating_sub(loading_count);
-        let mut footer_text = if unconfigured.is_empty() {
-            format!("{} of {} providers loaded", loaded, total)
-        } else {
-            format!(
-                "{} of {} loaded  ·  No key: {}",
-                loaded,
-                total,
-                unconfigured.join(", ")
-            )
-        };
-        if let Some(update) = &self.update_info {
-            footer_text.push_str(&format!("  ·  Update: {}", update.latest_version));
-        }
-        let footer = Paragraph::new(footer_text).style(Style::new().dim());
+        let footer = Paragraph::new(footer_line(
+            loaded,
+            total,
+            &unconfigured,
+            self.update_info.as_ref(),
+        ));
         f.render_widget(footer, footer_area);
 
         let order = self.visual_order();
@@ -1393,6 +1385,40 @@ enum RenderMode {
     OneLine,
 }
 
+fn footer_line(
+    loaded: usize,
+    total: usize,
+    unconfigured: &[&str],
+    update_info: Option<&UpdateInfo>,
+) -> Line<'static> {
+    let mut spans = if unconfigured.is_empty() {
+        vec![Span::styled(
+            format!("{} of {} providers loaded", loaded, total),
+            Style::new().dim(),
+        )]
+    } else {
+        vec![Span::styled(
+            format!(
+                "{} of {} loaded  ·  No key: {}",
+                loaded,
+                total,
+                unconfigured.join(", ")
+            ),
+            Style::new().dim(),
+        )]
+    };
+
+    if let Some(update) = update_info.filter(|info| info.is_update_available()) {
+        spans.push(Span::styled("  ·  ", Style::new().dim()));
+        spans.push(Span::styled(
+            format!("update {}", update.latest_version),
+            Style::new().fg(Color::Cyan).dim(),
+        ));
+    }
+
+    Line::from(spans)
+}
+
 /// Pick the densest rendering that fits the most windows in the available
 /// vertical space. Returns the chosen mode and the number of windows to
 /// actually render — anything beyond that is summarized as "+ N more".
@@ -1755,6 +1781,16 @@ mod tests {
         lines.join("\n")
     }
 
+    fn render_buffer(dashboard: &Dashboard, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| dashboard.render(f)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
     #[test]
     fn format_num_scales() {
         assert_eq!(format_num(500), "500");
@@ -1762,6 +1798,75 @@ mod tests {
         assert_eq!(format_num(2_000), "2k");
         assert_eq!(format_num(150_000), "150k");
         assert_eq!(format_num(2_500_000), "2.5M");
+    }
+
+    #[test]
+    fn footer_line_shows_available_update_as_subtle_colored_notice() {
+        let update = UpdateInfo {
+            current_version: "0.8.1".into(),
+            latest_version: "0.8.2".into(),
+            checked_at: chrono::Utc::now(),
+        };
+
+        let line = footer_line(6, 6, &[], Some(&update));
+        let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        assert_eq!(rendered, "6 of 6 providers loaded  ·  update 0.8.2");
+        let notice = line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "update 0.8.2")
+            .expect("update notice span should be present");
+        assert_eq!(notice.style.fg, Some(Color::Cyan));
+        assert!(notice.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn footer_line_omits_update_notice_when_current_is_latest() {
+        let update = UpdateInfo {
+            current_version: "0.8.2".into(),
+            latest_version: "0.8.2".into(),
+            checked_at: chrono::Utc::now(),
+        };
+
+        let line = footer_line(6, 6, &[], Some(&update));
+        let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        assert_eq!(rendered, "6 of 6 providers loaded");
+    }
+
+    #[test]
+    fn dashboard_footer_renders_update_notice_with_accent_color() {
+        let kinds = vec![ProviderKind::Claude];
+        let entries = vec![ProviderEntry::Done(dummy_available_result(
+            ProviderKind::Claude,
+        ))];
+        let mut dashboard = Dashboard::new_with_entries(kinds, entries);
+        dashboard.set_update_info(Some(UpdateInfo {
+            current_version: "0.8.1".into(),
+            latest_version: "0.8.2".into(),
+            checked_at: chrono::Utc::now(),
+        }));
+
+        let buffer = render_buffer(&dashboard, 80, 20);
+        let footer_y = 19;
+        let footer_text: String = (0..80)
+            .map(|x| {
+                buffer
+                    .cell((x, footer_y))
+                    .map(|c| c.symbol())
+                    .unwrap_or(" ")
+            })
+            .collect();
+        let notice_start = footer_text
+            .find("update 0.8.2")
+            .expect("update notice should render in footer");
+        let notice_cell = buffer
+            .cell((notice_start as u16, footer_y))
+            .expect("notice cell should exist");
+
+        assert_eq!(notice_cell.fg, Color::Cyan);
+        assert!(notice_cell.modifier.contains(Modifier::DIM));
     }
 
     #[test]
