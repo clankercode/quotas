@@ -106,6 +106,37 @@ struct ExtraUsage {
     used_credits: Option<f64>,
 }
 
+fn scoped_limit_model_slug(entry: &serde_json::Value) -> Option<String> {
+    let model = entry.get("scope")?.get("model")?;
+    let name = model
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .or_else(|| model.get("id").and_then(|v| v.as_str()))?;
+    slugify_model_name(name)
+}
+
+fn slugify_model_name(name: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            current.extend(ch.to_lowercase());
+        } else if !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("_"))
+    }
+}
+
 pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
     let parsed: Utilization = serde_json::from_value(body.clone()).unwrap_or(Utilization {
         five_hour: None,
@@ -163,6 +194,29 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
             }
             let rate_limit = serde_json::from_value(value.clone()).ok();
             push(&mut windows, &format!("weekly_{model}"), rate_limit);
+        }
+    }
+
+    if let Some(limits) = body.get("limits").and_then(|v| v.as_array()) {
+        for entry in limits {
+            if entry.get("group").and_then(|v| v.as_str()) != Some("weekly") {
+                continue;
+            }
+            let Some(model) = scoped_limit_model_slug(entry) else {
+                continue;
+            };
+            let name = format!("weekly_{model}");
+            if windows.iter().any(|w| w.window_type == name) {
+                continue;
+            }
+            let rate_limit = RateLimit {
+                utilization: entry.get("percent").and_then(|v| v.as_f64()),
+                resets_at: entry
+                    .get("resets_at")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+            };
+            push(&mut windows, &name, Some(rate_limit));
         }
     }
 
@@ -270,6 +324,39 @@ mod tests {
         assert_eq!(fable.used, 23);
         assert_eq!(fable.limit, 100);
         assert_eq!(fable.remaining, 77);
+        assert_eq!(fable.period_seconds, Some(7 * 86400));
+        assert!(fable.reset_at.is_some());
+    }
+
+    #[test]
+    fn parses_model_specific_weekly_limits_from_limits_array() {
+        let body = serde_json::json!({
+            "five_hour": {"utilization": 6.0, "resets_at": "2026-07-06T07:00:00Z"},
+            "seven_day": {"utilization": 59.0, "resets_at": "2026-07-08T12:00:00Z"},
+            "limits": [
+                {
+                    "group": "weekly",
+                    "kind": "weekly_scoped",
+                    "percent": 47,
+                    "resets_at": "2026-07-08T12:00:00.132115+00:00",
+                    "scope": {
+                        "model": {"display_name": "Fable", "id": null},
+                        "surface": null
+                    }
+                }
+            ]
+        });
+
+        let quota = parse_usage(&body);
+        let fable = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "weekly_fable")
+            .expect("Fable weekly limit should be surfaced from limits[]");
+
+        assert_eq!(fable.used, 47);
+        assert_eq!(fable.limit, 100);
+        assert_eq!(fable.remaining, 53);
         assert_eq!(fable.period_seconds, Some(7 * 86400));
         assert!(fable.reset_at.is_some());
     }
