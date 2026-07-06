@@ -153,6 +153,19 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         parsed.seven_day_oauth_apps,
     );
 
+    if let Some(obj) = body.as_object() {
+        for (key, value) in obj {
+            let Some(model) = key.strip_prefix("seven_day_") else {
+                continue;
+            };
+            if model.is_empty() || matches!(model, "opus" | "sonnet" | "oauth_apps") {
+                continue;
+            }
+            let rate_limit = serde_json::from_value(value.clone()).ok();
+            push(&mut windows, &format!("weekly_{model}"), rate_limit);
+        }
+    }
+
     // Extra usage (monthly paid credits topping up the base plan).
     if let Some(extra) = parsed.extra_usage {
         if extra.is_enabled {
@@ -230,6 +243,35 @@ mod tests {
         assert_eq!(five.used, 42);
         assert_eq!(five.remaining, 58);
         assert!(five.reset_at.is_some());
+    }
+
+    #[test]
+    fn parses_generic_model_specific_weekly_limits() {
+        let body = serde_json::json!({
+            "five_hour": {"utilization": 42.0, "resets_at": "2026-04-13T10:00:00Z"},
+            "seven_day_fable": {"utilization": 23.0, "resets_at": "2026-04-20T10:00:00Z"},
+            "seven_day_oracle": {"utilization": 67.0, "resets_at": "2026-04-20T10:00:00Z"}
+        });
+
+        let quota = parse_usage(&body);
+        let labels: Vec<_> = quota
+            .windows
+            .iter()
+            .map(|w| w.window_type.as_str())
+            .collect();
+
+        assert_eq!(labels, vec!["5h", "weekly_fable", "weekly_oracle"]);
+
+        let fable = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "weekly_fable")
+            .expect("fable weekly limit should be surfaced");
+        assert_eq!(fable.used, 23);
+        assert_eq!(fable.limit, 100);
+        assert_eq!(fable.remaining, 77);
+        assert_eq!(fable.period_seconds, Some(7 * 86400));
+        assert!(fable.reset_at.is_some());
     }
 
     #[test]

@@ -214,41 +214,67 @@ pub fn bucket_label(bucket: u8) -> Option<&'static str> {
 pub fn display_label(window_type: &str, show_headers: bool) -> String {
     // First, the rename table — applies regardless of show_headers
     // because these are purely cosmetic improvements to the raw key.
-    let renamed: &str = match window_type {
-        "weekly" => "7d",
-        "weekly_sonnet" => "7d Snt",
-        "weekly_opus" => "7d Opus",
-        "weekly_haiku" => "7d Haiku",
-        "monthly_mcp" => "MCP",
-        "monthly" => "month",
-        "extra_credits" => "Creds",
-        "payg_balance" => "PAYG",
-        "balance_usd" | "balance_cny" => "balance",
-        "paid_cny" => "paid",
-        "free_cny" => "free",
-        "granted_cny" | "granted_usd" => "granted",
-        "topped_up_cny" | "topped_up_usd" => "topped-up",
-        "credits_usd" => "credits",
-        "key_limit_usd" => "key limit",
+    let renamed = match window_type {
+        "weekly" => "7d".to_string(),
+        "weekly_sonnet" => "7d Snt".to_string(),
+        "weekly_opus" => "7d Opus".to_string(),
+        "weekly_haiku" => "7d Haiku".to_string(),
+        "monthly_mcp" => "MCP".to_string(),
+        "monthly" => "month".to_string(),
+        "extra_credits" => "Creds".to_string(),
+        "payg_balance" => "PAYG".to_string(),
+        "balance_usd" | "balance_cny" => "balance".to_string(),
+        "paid_cny" => "paid".to_string(),
+        "free_cny" => "free".to_string(),
+        "granted_cny" | "granted_usd" => "granted".to_string(),
+        "topped_up_cny" | "topped_up_usd" => "topped-up".to_string(),
+        "credits_usd" => "credits".to_string(),
+        "key_limit_usd" => "key limit".to_string(),
         // Cursor-specific short labels
-        "api_usage_pct" => "API%",
-        "auto_usage_pct" => "Auto%",
-        "billing_cycle" => "BC",
-        "spend_limit" => "$ Lim",
-        "bonus" => "Bonus",
-        other => other,
+        "api_usage_pct" => "API%".to_string(),
+        "auto_usage_pct" => "Auto%".to_string(),
+        "billing_cycle" => "BC".to_string(),
+        "spend_limit" => "$ Lim".to_string(),
+        "bonus" => "Bonus".to_string(),
+        other => generic_display_label(other),
     };
     if !show_headers {
-        return renamed.to_string();
+        return renamed;
     }
-    for prefix in ["5h/", "wk/", "7d/", "weekly/", "monthly/", "monthly_"] {
+    for prefix in [
+        "5h/", "wk/", "7d/", "7d ", "weekly/", "monthly/", "monthly_",
+    ] {
         if let Some(rest) = renamed.strip_prefix(prefix) {
             if !rest.is_empty() {
                 return rest.to_string();
             }
         }
     }
-    renamed.to_string()
+    renamed
+}
+
+fn generic_display_label(window_type: &str) -> String {
+    let Some(rest) = window_type.strip_prefix("weekly_") else {
+        return window_type.to_string();
+    };
+    if rest.is_empty() {
+        return window_type.to_string();
+    }
+
+    let name = rest
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!("7d {name}")
 }
 
 /// Whether a window type should be hidden by default to keep cards compact.
@@ -302,6 +328,12 @@ mod tests {
         // used 25%, time 75% → cells 1..3 (2 of 4) are slack ▒.
         let s = to_string(&build(0.25, Some(0.75), 4, Color::Green));
         assert_eq!(s, "█▒▒░");
+    }
+
+    #[test]
+    fn display_label_shortens_generic_weekly_model_limits() {
+        assert_eq!(display_label("weekly_fable", false), "7d Fable");
+        assert_eq!(display_label("weekly_fable", true), "Fable");
     }
 
     #[test]

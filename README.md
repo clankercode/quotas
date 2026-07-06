@@ -103,7 +103,9 @@ Each provider result reports one of:
 
 - **available** — authenticated and the usage API responded. Includes a
   plan name and one or more `QuotaWindow` entries (`5h`, `weekly`, etc.)
-  with used/limit/remaining and reset timestamps.
+  with used/limit/remaining and reset timestamps. Claude subscription results
+  also surface model-specific weekly windows reported by the API, such as
+  `weekly_fable`.
 - **auth_required** — no credentials were discoverable for that provider.
 - **unavailable** — credentials worked but the server reported the plan
   is not active or the endpoint returned an error; includes a console URL.
