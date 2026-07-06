@@ -105,16 +105,26 @@ fn format_result(result: &ProviderResult, format: &str, icons: bool) -> Option<S
     }
 }
 
-/// Pick the "primary" window to display. Prefers the first non-unlimited window,
-/// falling back to the first window if all are unlimited or list is empty.
+/// Pick the "primary" window to display. Prefer the finite quota with the
+/// smallest remaining share so summaries show the current bottleneck.
 fn primary_window(windows: &[QuotaWindow]) -> Option<&QuotaWindow> {
     if windows.is_empty() {
         return None;
     }
-    // If there's a window with a finite limit, prefer it.
     windows
         .iter()
-        .find(|w| w.limit > 0)
+        .filter(|w| w.limit > 0)
+        .min_by(|a, b| {
+            let a_remaining = a.remaining.max(0) as i128;
+            let b_remaining = b.remaining.max(0) as i128;
+            let a_limit = a.limit as i128;
+            let b_limit = b.limit as i128;
+
+            (a_remaining * b_limit)
+                .cmp(&(b_remaining * a_limit))
+                .then_with(|| b.used.cmp(&a.used))
+                .then_with(|| a.window_type.cmp(&b.window_type))
+        })
         .or_else(|| windows.first())
 }
 
@@ -152,6 +162,26 @@ mod tests {
                         reset_at: None,
                         period_seconds: Some(18000),
                     }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        }
+    }
+
+    fn available_result_with_windows(
+        kind: ProviderKind,
+        windows: Vec<QuotaWindow>,
+    ) -> ProviderResult {
+        ProviderResult {
+            kind,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "test".into(),
+                    windows,
                     unlimited: false,
                 },
             },
@@ -284,5 +314,53 @@ mod tests {
         let out = render(&cache, &config);
         assert!(out.contains("Claude"));
         assert!(!out.contains("Codex"));
+    }
+
+    #[test]
+    fn custom_format_uses_most_constrained_window() {
+        let mut cache = CacheFile::default();
+        cache.entries.insert(
+            "claude".into(),
+            crate::cache::CacheEntry {
+                result: available_result_with_windows(
+                    ProviderKind::Claude,
+                    vec![
+                        QuotaWindow {
+                            window_type: "5h".into(),
+                            used: 4,
+                            limit: 100,
+                            remaining: 96,
+                            reset_at: None,
+                            period_seconds: Some(5 * 3600),
+                        },
+                        QuotaWindow {
+                            window_type: "weekly".into(),
+                            used: 81,
+                            limit: 100,
+                            remaining: 19,
+                            reset_at: None,
+                            period_seconds: Some(7 * 86400),
+                        },
+                        QuotaWindow {
+                            window_type: "weekly_fable".into(),
+                            used: 84,
+                            limit: 100,
+                            remaining: 16,
+                            reset_at: None,
+                            period_seconds: Some(7 * 86400),
+                        },
+                    ],
+                ),
+                cached_at: Utc::now(),
+            },
+        );
+        let config = StatusLineConfig {
+            icons: false,
+            format: Some("%provider %window %used/%limit".into()),
+            ..Default::default()
+        };
+
+        let out = render(&cache, &config);
+        assert_eq!(out, "Claude weekly_fable 84/100");
     }
 }
