@@ -281,6 +281,16 @@ impl crate::providers::Provider for MinimaxProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/minimax")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
 
     #[test]
     fn percent_only_model_emits_two_windows() {
@@ -401,5 +411,56 @@ mod tests {
         assert!(quota.plan_name.contains("M2.7"));
         // Coding-plan model's window first.
         assert_eq!(quota.windows[0].limit, 100);
+    }
+
+    #[test]
+    fn parses_live_fixture_mixed_count_and_percent() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut body = fixture("coding_plan_remains_live.json");
+        for m in body["model_remains"].as_array_mut().unwrap() {
+            m["start_time"] = serde_json::json!(now - 3_600_000);
+            m["end_time"] = serde_json::json!(now + 4 * 3_600_000);
+            m["weekly_start_time"] = serde_json::json!(now - 6 * 86_400_000);
+            m["weekly_end_time"] = serde_json::json!(now + 1 * 86_400_000);
+        }
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiniMax · MiniMax Coding Plan");
+        assert_eq!(quota.windows.len(), 4);
+
+        let five_g = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h/general")
+            .expect("5h/general");
+        assert_eq!(five_g.limit, 100);
+        assert_eq!(five_g.remaining, 99);
+        assert_eq!(five_g.used, 1);
+
+        let wk_g = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "wk/general")
+            .expect("wk/general");
+        assert_eq!(wk_g.limit, 100);
+        assert_eq!(wk_g.remaining, 98);
+        assert_eq!(wk_g.used, 2);
+
+        let five_v = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h/video")
+            .expect("5h/video");
+        assert_eq!(five_v.limit, 3);
+        assert_eq!(five_v.remaining, 3);
+        assert_eq!(five_v.used, 0);
+
+        let wk_v = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "wk/video")
+            .expect("wk/video");
+        assert_eq!(wk_v.limit, 21);
+        assert_eq!(wk_v.remaining, 21);
+        assert_eq!(wk_v.used, 0);
     }
 }
