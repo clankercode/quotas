@@ -105,6 +105,14 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         weekly_end_time: i64,
         #[serde(rename = "weekly_start_time", default)]
         weekly_start_time: i64,
+        #[serde(default)]
+        current_interval_remaining_percent: Option<u8>,
+        #[serde(default)]
+        current_interval_status: Option<i32>,
+        #[serde(default)]
+        current_weekly_remaining_percent: Option<u8>,
+        #[serde(default)]
+        current_weekly_status: Option<i32>,
     }
 
     #[derive(Deserialize)]
@@ -246,6 +254,28 @@ impl crate::providers::Provider for MinimaxProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_new_percent_and_status_fields() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "general",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 0,
+                "current_interval_usage_count": 0,
+                "current_interval_remaining_percent": 99,
+                "current_interval_status": 1,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 98,
+                "current_weekly_status": 1,
+                "weekly_end_time": 0
+            }]
+        });
+        // No assertion yet — just ensure it deserializes without panicking.
+        let _ = parse_response(&body).unwrap();
+    }
 
     #[test]
     fn parses_minimax_remains_payload() {
