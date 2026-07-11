@@ -183,8 +183,9 @@ Key differences from the inferred shape:
   parser strips it via `trim_start_matches("TIME_UNIT_")`.
 - **All numbers come back as strings** (`"100"` not `100`). The parser
   accepts both via `num_field`.
-- **`totalQuota` carries the monthly Kimi-membership usage** (used=1 of 100)
-  which is the **upstream cap on Kimi Code**. Per the Kimi docs
+- **`totalQuota` carries the monthly Kimi-membership usage** (`used` is
+  reported on a 0/100+ scale, `limit` is meaningless) which is the
+  **upstream cap on Kimi Code**. Per the Kimi docs
   ([Overview](https://www.kimi.com/code/docs/en/),
   [Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
   [Error Reference](https://www.kimi.com/code/docs/en/kimi-code/error-reference.html)):
@@ -192,7 +193,10 @@ Key differences from the inferred shape:
   frozen until the monthly quota resets or you upgrade." The 7d/5h windows
   stay at 100/100 even when the server returns 403 `access_terminated_error`
   on coding requests — confirmed empirically on 2026-07-11. The parser
-  surfaces this as `total_quota` so users see it before hitting the wall.
+  surfaces this as `total_quota` and collapses it to a **binary signal**
+  (`used=0` → available, `used≥1` → exhausted, raw `limit` ignored) so
+  the bar renders fully red the moment the monthly cap is touched,
+  regardless of how far into the cycle you are.
 - **`parallel.limit` ("20")** represents a concurrent-request cap. It is
   not a time-windowed quota and is **not** surfaced as a quota bar (the
   value is the static ceiling, not tracked usage).

@@ -228,28 +228,35 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
     // totalQuota is the monthly Kimi-membership cap. Per the Kimi docs
     // (https://www.kimi.com/code/docs/en/kimi-code/membership.html), when
     // this is reached the entire Kimi Code quota is "frozen" regardless of
-    // the 7d and 5h windows, which is why surfacing it matters. The server
-    // returns it without a reset timestamp, so the bar renders without
-    // pacing or a "resets in X" hint.
+    // the 7d and 5h windows, which is why surfacing it matters.
+    //
+    // The server returns `used` on a 0/100+ scale, but the only signal
+    // that actually matters is "any usage at all" — the raw `limit` is
+    // meaningless, and whether used=1 or used=50, the result is the same:
+    // the monthly cap is exhausted and Kimi Code is frozen. Collapse the
+    // window to a binary state so the bar renders fully red (exhausted)
+    // or fully green (available) instead of an unhelpful 1% / 50% bar.
+    // The server also returns no reset timestamp, so the bar renders
+    // without pacing or a "resets in X" hint.
     if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
-        let limit = num_field(&serde_json::Value::Object(total.clone()), "limit");
-        let used = if total.contains_key("used") {
-            num_field(&serde_json::Value::Object(total.clone()), "used")
+        let total_value = serde_json::Value::Object(total.clone());
+        let raw_limit = num_field(&total_value, "limit");
+        let raw_used = if total.contains_key("used") {
+            num_field(&total_value, "used")
         } else {
-            let remaining = num_field(&serde_json::Value::Object(total.clone()), "remaining");
-            (limit - remaining).max(0)
+            // No `used` field — derive from `remaining` against the raw
+            // limit. The limit value only matters for this fallback math;
+            // it is never surfaced in the emitted window.
+            let remaining = num_field(&total_value, "remaining");
+            (raw_limit - remaining).max(0)
         };
-        let remaining = if total.contains_key("remaining") {
-            num_field(&serde_json::Value::Object(total.clone()), "remaining")
-        } else {
-            (limit - used).max(0)
-        };
-        if limit > 0 {
+        let exhausted = raw_used > 0;
+        if raw_limit > 0 {
             windows.push(QuotaWindow {
                 window_type: "total_quota".to_string(),
-                used,
-                limit,
-                remaining,
+                used: i64::from(exhausted),
+                limit: 1,
+                remaining: i64::from(!exhausted),
                 reset_at: None,
                 period_seconds: None,
             });
@@ -334,14 +341,17 @@ mod tests {
         // Server returns it without a reset timestamp and the
         // 7d/5h windows both report 100/100 even when the billing
         // cycle is exhausted — which is why surfacing it matters.
+        // The raw value is "any usage at all" — `used=1` of the
+        // meaningless 100-limit collapses to a binary exhausted
+        // signal so the bar renders fully red instead of 1% green.
         let total = quota
             .windows
             .iter()
             .find(|w| w.window_type == "total_quota")
             .expect("total_quota window");
-        assert_eq!(total.limit, 100);
-        assert_eq!(total.used, 1);
-        assert_eq!(total.remaining, 99);
+        assert_eq!(total.limit, 1, "raw 100-limit collapsed to binary 1");
+        assert_eq!(total.used, 1, "non-zero used => exhausted");
+        assert_eq!(total.remaining, 0);
         assert!(
             total.reset_at.is_none(),
             "totalQuota carries no server-provided reset timestamp"
@@ -350,6 +360,77 @@ mod tests {
             total.period_seconds.is_none(),
             "no period_seconds without a reset hint; bar renders without pacing"
         );
+    }
+
+    #[test]
+    fn parses_total_quota_as_available_when_used_zero() {
+        // When the monthly membership cap is untouched, totalQuota
+        // reports used=0 / remaining=100. Collapsed to binary:
+        // limit=1, used=0, remaining=1 — bar renders fully green.
+        let body = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100", "resetTime": "2026-07-13T09:59:07Z"},
+            "limits": [],
+            "totalQuota": {"limit": "100", "used": "0", "remaining": "100"}
+        });
+        let quota = parse_coding_response(&body);
+        let total = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window");
+        assert_eq!(total.limit, 1);
+        assert_eq!(total.used, 0);
+        assert_eq!(total.remaining, 1);
+    }
+
+    #[test]
+    fn parses_total_quota_ignores_raw_limit_value() {
+        // The raw `limit` value is irrelevant — only "any usage at all"
+        // matters. Whether the server reports used=1/100 or used=50/100,
+        // the binary output must be identical.
+        let body_low = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100"},
+            "limits": [],
+            "totalQuota": {"limit": "100", "used": "1", "remaining": "99"}
+        });
+        let body_high = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100"},
+            "limits": [],
+            "totalQuota": {"limit": "100", "used": "50", "remaining": "50"}
+        });
+        let total_low = parse_coding_response(&body_low)
+            .windows
+            .into_iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window (low)");
+        let total_high = parse_coding_response(&body_high)
+            .windows
+            .into_iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window (high)");
+        assert_eq!((total_low.limit, total_low.used, total_low.remaining), (1, 1, 0));
+        assert_eq!((total_high.limit, total_high.used, total_high.remaining), (1, 1, 0));
+    }
+
+    #[test]
+    fn parses_total_quota_from_remaining_only_when_used_missing() {
+        // Some /usages responses may omit `used` and only supply
+        // `remaining`. Fallback math still derives exhaustion: any
+        // tokens consumed (remaining < limit) is a non-zero used
+        // signal, so the binary result is exhausted.
+        let body = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100"},
+            "limits": [],
+            "totalQuota": {"limit": "100", "remaining": "99"}
+        });
+        let total = parse_coding_response(&body)
+            .windows
+            .into_iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window");
+        assert_eq!(total.limit, 1);
+        assert_eq!(total.used, 1, "remaining<limit => exhausted");
+        assert_eq!(total.remaining, 0);
     }
 
     #[test]
