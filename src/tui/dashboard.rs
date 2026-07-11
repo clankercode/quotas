@@ -504,9 +504,7 @@ impl Dashboard {
     }
 
     /// Assigns each card in `page_order` a (row, col, span) placement.
-    /// MiniMax spans 2 columns; all other cards span 1.
-    /// When `allow_spanning` is true, MiniMax also spans 2 rows (2×2).
-    /// Cards wrap to the next row when they would overflow `cols`.
+    /// All cards span 1 column and 1 row; cards wrap to the next row on overflow.
     fn flow_placements(
         _entries: &[ProviderEntry],
         page_order: &[usize],

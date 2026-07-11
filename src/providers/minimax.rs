@@ -167,7 +167,7 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
             let pct = (pct as i64).min(100);
             let limit: i64 = 100;
             let remaining = pct;
-            let used = (100 - pct).clamp(0, 100);
+            let used = 100 - pct;
             let label = format!("5h/{}", short_model_name(&m.model_name));
             windows.push(QuotaWindow {
                 window_type: label,
@@ -202,7 +202,7 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
             let pct = (pct as i64).min(100);
             let limit: i64 = 100;
             let remaining = pct;
-            let used = (100 - pct).clamp(0, 100);
+            let used = 100 - pct;
             let label = format!("wk/{}", short_model_name(&m.model_name));
             windows.push(QuotaWindow {
                 window_type: label,
@@ -421,7 +421,7 @@ mod tests {
             m["start_time"] = serde_json::json!(now - 3_600_000);
             m["end_time"] = serde_json::json!(now + 4 * 3_600_000);
             m["weekly_start_time"] = serde_json::json!(now - 6 * 86_400_000);
-            m["weekly_end_time"] = serde_json::json!(now + 1 * 86_400_000);
+            m["weekly_end_time"] = serde_json::json!(now + 86_400_000);
         }
         let quota = parse_response(&body).unwrap();
         assert_eq!(quota.plan_name, "MiniMax · MiniMax Coding Plan");
