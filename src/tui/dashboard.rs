@@ -60,7 +60,6 @@ pub struct Dashboard {
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     pub show_all_windows: bool,
-    pub vertical_spanning: bool,
     pub auto_refresh_enabled: bool,
     pub update_info: Option<UpdateInfo>,
     favorite_providers: BTreeSet<String>,
@@ -92,7 +91,6 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
-            vertical_spanning: false,
             auto_refresh_enabled: true,
             update_info: None,
             favorite_providers: BTreeSet::new(),
@@ -122,7 +120,6 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
-            vertical_spanning: false,
             auto_refresh_enabled: true,
             update_info: None,
             favorite_providers: BTreeSet::new(),
@@ -586,7 +583,7 @@ impl Dashboard {
                 &self.entries,
                 &self.stable_order[..total],
                 cols,
-                self.vertical_spanning,
+                false,
             )
             .iter()
             .map(|(r, _, _)| r + 1)
@@ -609,7 +606,7 @@ impl Dashboard {
             for k in 1..=n.min(self.stable_order.len()) {
                 let slice = &self.stable_order[..k];
                 let placements =
-                    Self::flow_placements(&self.entries, slice, cols, self.vertical_spanning);
+                    Self::flow_placements(&self.entries, slice, cols, false);
                 let nr = placements.iter().map(|(r, _, _)| r + 1).max().unwrap_or(0);
                 if nr > max_rows {
                     break;
@@ -834,7 +831,7 @@ impl Dashboard {
             &self.entries,
             &order[page_start..page_end],
             cols,
-            self.vertical_spanning,
+            false,
         );
         let num_rows = placements
             .iter()

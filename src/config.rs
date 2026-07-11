@@ -37,8 +37,6 @@ impl Default for StalenessConfig {
 #[serde(default)]
 pub struct Ui {
     pub show_all_windows: bool,
-    /// Allow cards to span multiple rows (e.g. MiniMax as 2×2). Default: false.
-    pub vertical_spanning: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
