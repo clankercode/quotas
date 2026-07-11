@@ -225,6 +225,37 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
         });
     }
 
+    // totalQuota is the monthly Kimi-membership cap. Per the Kimi docs
+    // (https://www.kimi.com/code/docs/en/kimi-code/membership.html), when
+    // this is reached the entire Kimi Code quota is "frozen" regardless of
+    // the 7d and 5h windows, which is why surfacing it matters. The server
+    // returns it without a reset timestamp, so the bar renders without
+    // pacing or a "resets in X" hint.
+    if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
+        let limit = num_field(&serde_json::Value::Object(total.clone()), "limit");
+        let used = if total.contains_key("used") {
+            num_field(&serde_json::Value::Object(total.clone()), "used")
+        } else {
+            let remaining = num_field(&serde_json::Value::Object(total.clone()), "remaining");
+            (limit - remaining).max(0)
+        };
+        let remaining = if total.contains_key("remaining") {
+            num_field(&serde_json::Value::Object(total.clone()), "remaining")
+        } else {
+            (limit - used).max(0)
+        };
+        if limit > 0 {
+            windows.push(QuotaWindow {
+                window_type: "total_quota".to_string(),
+                used,
+                limit,
+                remaining,
+                reset_at: None,
+                period_seconds: None,
+            });
+        }
+    }
+
     ProviderQuota {
         plan_name: "Kimi Coding Plan".to_string(),
         windows,
@@ -256,6 +287,86 @@ impl crate::providers::Provider for KimiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/kimi")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
+
+    #[test]
+    fn parses_live_coding_usages_fixture() {
+        // Captured live from https://api.kimi.com/coding/v1/usages on 2026-07-11.
+        // Response uses string-typed numbers ("100") and `resetTime` (not
+        // `reset_at`), plus the TIME_UNIT_-prefixed time unit. The parser
+        // accepts both via num_field() / trim_start_matches("TIME_UNIT_").
+        let body = fixture("coding_usages_default.json");
+        let quota = parse_coding_response(&body);
+
+        assert_eq!(quota.plan_name, "Kimi Coding Plan");
+
+        let weekly = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "weekly")
+            .expect("weekly window");
+        assert_eq!(weekly.limit, 100);
+        assert_eq!(weekly.remaining, 100);
+        assert!(weekly.reset_at.is_some(), "weekly reset parsed");
+        assert_eq!(weekly.period_seconds, Some(7 * 86400));
+
+        let five_h = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h")
+            .expect("5h window");
+        assert_eq!(five_h.limit, 100);
+        assert_eq!(five_h.remaining, 100);
+        assert_eq!(five_h.period_seconds, Some(5 * 3600));
+        assert!(five_h.reset_at.is_some(), "5h reset parsed");
+
+        // totalQuota is the monthly Kimi-membership cap (per
+        // https://www.kimi.com/code/docs/en/kimi-code/membership.html).
+        // Server returns it without a reset timestamp and the
+        // 7d/5h windows both report 100/100 even when the billing
+        // cycle is exhausted — which is why surfacing it matters.
+        let total = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window");
+        assert_eq!(total.limit, 100);
+        assert_eq!(total.used, 1);
+        assert_eq!(total.remaining, 99);
+        assert!(
+            total.reset_at.is_none(),
+            "totalQuota carries no server-provided reset timestamp"
+        );
+        assert!(
+            total.period_seconds.is_none(),
+            "no period_seconds without a reset hint; bar renders without pacing"
+        );
+    }
+
+    #[test]
+    fn parses_kimi_coding_usages_without_total_quota() {
+        // Older / free-tier responses may omit totalQuota entirely.
+        // Parser must not crash or emit a phantom window.
+        let body = serde_json::json!({
+            "usage": {"limit": 50, "remaining": 50, "reset_at": "2026-07-13T00:00:00Z"},
+            "limits": [{
+                "detail": {"limit": 20, "remaining": 20, "resetTime": "2026-07-11T14:00:00Z"},
+                "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}
+            }]
+        });
+        let quota = parse_coding_response(&body);
+        assert_eq!(quota.windows.len(), 2);
+        assert!(!quota.windows.iter().any(|w| w.window_type == "total_quota"));
+    }
 
     #[test]
     fn parses_kimi_coding_usages() {

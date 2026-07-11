@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Added **Grok / xAI** provider: reuses Grok Build's `~/.grok/auth.json` session; fetches both monthly $ allowance (`/v1/billing`) and weekly product usage (`/v1/billing?format=credits`); Management API prepaid as fallback. Live fixtures under `tests/fixtures/grok/`.
+- **Kimi fixtures refreshed**: captured a live `/coding/v1/usages` response into `tests/fixtures/kimi/coding_usages_default.json` and added `parses_live_coding_usages_fixture` test. Confirms the existing parser already handles string-typed numbers, `resetTime` (vs `reset_at`), and the `TIME_UNIT_`-prefixed time unit.
+- **Kimi: surface the monthly membership cap** as a third quota window (`window_type: "total_quota"`, display label "total", sorted into the monthly bucket). The `/usages` endpoint's `totalQuota` field is the upstream cap that, when reached, freezes all Kimi Code requests per the [Kimi docs](https://www.kimi.com/code/docs/en/kimi-code/membership.html) — even though the 7d and 5h windows still report 100/100 remaining. Empirically confirmed on 2026-07-11: chat completions returned `403 access_terminated_error` with the new code while `/usages` showed full 7d/5h windows and `totalQuota.used=1/100`. Added `parses_kimi_coding_usages_without_total_quota` for the missing-field case.
+- **Docs refreshed**: `docs-usage/kimi.md` updated with the empirically confirmed live response shape, including all new fields and a side-by-side diff vs the previously inferred shape.
 
 ## 0.8.3 - 2026-07-07
 

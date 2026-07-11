@@ -183,7 +183,10 @@ pub fn window_sort_key(w: &QuotaWindow) -> (u8, String) {
         9
     } else if lower.contains("credit") {
         8
-    } else if lower.starts_with("monthly") || lower.contains("month") {
+    } else if lower.starts_with("monthly")
+        || lower.contains("month")
+        || lower == "total_quota"
+    {
         3
     } else if lower == "5h" || lower.starts_with("5h/") || lower.starts_with("5h ") {
         1
@@ -221,6 +224,7 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "weekly_haiku" => "7d Haiku".to_string(),
         "monthly_mcp" => "MCP".to_string(),
         "monthly" => "month".to_string(),
+        "total_quota" => "total".to_string(),
         "extra_credits" => "Creds".to_string(),
         "payg_balance" => "PAYG".to_string(),
         "balance_usd" | "balance_cny" => "balance".to_string(),
@@ -336,6 +340,45 @@ mod tests {
     fn display_label_shortens_generic_weekly_model_limits() {
         assert_eq!(display_label("weekly_fable", false), "7d Fable");
         assert_eq!(display_label("weekly_fable", true), "Fable");
+    }
+
+    #[test]
+    fn display_label_total_quota() {
+        // kimi's monthly membership cap surfaces as `total_quota` so it
+        // collocates with the "monthly" bucket in the TUI.
+        assert_eq!(display_label("total_quota", false), "total");
+        assert_eq!(display_label("total_quota", true), "total");
+    }
+
+    #[test]
+    fn sort_key_groups_total_quota_into_monthly_bucket() {
+        let monthly = QuotaWindow {
+            window_type: "monthly".into(),
+            used: 0,
+            limit: 0,
+            remaining: 0,
+            reset_at: None,
+            period_seconds: None,
+        };
+        let total = QuotaWindow {
+            window_type: "total_quota".into(),
+            used: 0,
+            limit: 0,
+            remaining: 0,
+            reset_at: None,
+            period_seconds: None,
+        };
+        let seven_d = QuotaWindow {
+            window_type: "weekly".into(),
+            used: 0,
+            limit: 0,
+            remaining: 0,
+            reset_at: None,
+            period_seconds: None,
+        };
+        // total_quota and monthly share bucket 3 ("monthly"); weekly is bucket 2.
+        assert_eq!(window_sort_key(&total).0, window_sort_key(&monthly).0);
+        assert!(window_sort_key(&total) > window_sort_key(&seven_d));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Kimi / Moonshot -- account usage endpoints
 
-Research date: 2026-04-12
+Research date: 2026-04-12 (updated 2026-07-11 with live fixture)
 
 
 ## Surface 1: Kimi PAYG (api.moonshot.ai)
@@ -144,6 +144,58 @@ The kimi-cli parser (`_parse_usage_payload` in `usage.py`) expects:
   ]
 }
 ```
+
+**Live fixture (captured 2026-07-11)** -- saved as
+`tests/fixtures/kimi/coding_usages_default.json`. Confirms the parser's
+inferred shape, but adds new fields the parser does **not** consume:
+
+```json
+{
+  "user": { "userId", "region": "REGION_OVERSEA", "membership", "businessId" },
+  "usage": {
+    "limit": "100",
+    "remaining": "100",
+    "resetTime": "2026-07-13T09:59:07.479363Z"
+  },
+  "limits": [{
+    "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+    "detail": {
+      "limit": "100",
+      "remaining": "100",
+      "resetTime": "2026-07-11T13:59:07.479363Z"
+    }
+  }],
+  "parallel":     { "limit": "20" },
+  "totalQuota":   { "limit": "100", "used": "1", "remaining": "99" },
+  "authentication": { "method": "METHOD_ACCESS_TOKEN", "scope": "FEATURE_CODING" },
+  "subType": "TYPE_PURCHASE"
+}
+```
+
+Key differences from the inferred shape:
+
+- **`usage.used` is absent** in the live response; `remaining` is authoritative
+  and `used` is derived as `limit - remaining`.
+- **`usage.name` is absent**; the parser falls back to its own "weekly" label.
+- **Reset field is `resetTime`, not `reset_at`** (PascalCase). The parser
+  already accepts both, so this works.
+- **`timeUnit` carries a `TIME_UNIT_` prefix** (`TIME_UNIT_MINUTE`). The
+  parser strips it via `trim_start_matches("TIME_UNIT_")`.
+- **All numbers come back as strings** (`"100"` not `100`). The parser
+  accepts both via `num_field`.
+- **`totalQuota` carries the monthly Kimi-membership usage** (used=1 of 100)
+  which is the **upstream cap on Kimi Code**. Per the Kimi docs
+  ([Overview](https://www.kimi.com/code/docs/en/),
+  [Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
+  [Error Reference](https://www.kimi.com/code/docs/en/kimi-code/error-reference.html)):
+  "if your Kimi membership's monthly total is reached, Kimi Code quota is
+  frozen until the monthly quota resets or you upgrade." The 7d/5h windows
+  stay at 100/100 even when the server returns 403 `access_terminated_error`
+  on coding requests — confirmed empirically on 2026-07-11. The parser
+  surfaces this as `total_quota` so users see it before hitting the wall.
+- **`parallel.limit` ("20")** represents a concurrent-request cap. It is
+  not a time-windowed quota and is **not** surfaced as a quota bar (the
+  value is the static ceiling, not tracked usage).
 
 Field semantics derived from the parser:
 
