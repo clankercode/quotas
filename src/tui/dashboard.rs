@@ -506,10 +506,8 @@ impl Dashboard {
     /// Assigns each card in `page_order` a (row, col, span) placement.
     /// All cards span 1 column and 1 row; cards wrap to the next row on overflow.
     fn flow_placements(
-        _entries: &[ProviderEntry],
         page_order: &[usize],
         cols: usize,
-        _allow_spanning: bool,
     ) -> Vec<(usize, usize, usize)> {
         if cols == 0 || page_order.is_empty() {
             return Vec::new();
@@ -578,10 +576,8 @@ impl Dashboard {
                 return 1;
             }
             Self::flow_placements(
-                &self.entries,
                 &self.stable_order[..total],
                 cols,
-                false,
             )
             .iter()
             .map(|(r, _, _)| r + 1)
@@ -604,7 +600,7 @@ impl Dashboard {
             for k in 1..=n.min(self.stable_order.len()) {
                 let slice = &self.stable_order[..k];
                 let placements =
-                    Self::flow_placements(&self.entries, slice, cols, false);
+                    Self::flow_placements(slice, cols);
                 let nr = placements.iter().map(|(r, _, _)| r + 1).max().unwrap_or(0);
                 if nr > max_rows {
                     break;
@@ -822,14 +818,11 @@ impl Dashboard {
         let page_count = page_end - page_start;
         let cols = layout.cols.min(page_count.max(1));
 
-        // Flow-based placement: MiniMax spans 2 columns, all others span 1.
-        // This keeps card widths at a consistent unit_col_w so MiniMax is
-        // always exactly twice as wide as its neighbours.
+        // Flow-based placement: all cards span 1 column and 1 row, wrapping
+        // to the next row when they would overflow `cols`.
         let placements = Self::flow_placements(
-            &self.entries,
             &order[page_start..page_end],
             cols,
-            false,
         );
         let num_rows = placements
             .iter()
