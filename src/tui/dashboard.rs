@@ -511,10 +511,10 @@ impl Dashboard {
     /// When `allow_spanning` is true, MiniMax also spans 2 rows (2×2).
     /// Cards wrap to the next row when they would overflow `cols`.
     fn flow_placements(
-        entries: &[ProviderEntry],
+        _entries: &[ProviderEntry],
         page_order: &[usize],
         cols: usize,
-        allow_spanning: bool,
+        _allow_spanning: bool,
     ) -> Vec<(usize, usize, usize)> {
         if cols == 0 || page_order.is_empty() {
             return Vec::new();
@@ -526,13 +526,9 @@ impl Dashboard {
         let mut out = Vec::with_capacity(page_order.len());
         let mut scan_row = 0usize;
 
-        for &entry_idx in page_order {
-            let is_minimax = matches!(&entries[entry_idx],
-                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
-                    if r.kind == ProviderKind::Minimax);
-
-            let span = if is_minimax { 2 } else { 1 }.min(cols);
-            let row_span = if is_minimax && allow_spanning { 2 } else { 1 };
+        for &_entry_idx in page_order {
+            let span = 1usize.min(cols);
+            let row_span = 1usize;
 
             // Find the first (row, col) where all span×row_span cells are free.
             let mut placed = false;
@@ -932,15 +928,7 @@ impl Dashboard {
                     // 2 border + 1 header (name+freshness) + 1 plan name
                     let fixed: u16 = 4;
                     // +1 for footer_reserve that render_done_card always subtracts.
-                    let content: u16 = if r.kind == ProviderKind::Minimax {
-                        // 2-col render: 1 col-header row + 1 row per model pair
-                        // + 1 reset-period footer row per unique period.
-                        let model_rows = visible.div_ceil(2) as u16;
-                        1 + model_rows + 2 // 2 reset lines (one per period)
-                    } else {
-                        // TwoLine: 2 lines per window (bar + reset).
-                        (visible as u16) * 2 + 1
-                    };
+                    let content: u16 = (visible as u16) * 2 + 1;
                     (fixed + content).max(MIN_CARD_H)
                 }
                 // Auth-required cards are squat indicator boxes: just border +
@@ -962,13 +950,7 @@ impl Dashboard {
                         .filter(|w| self.window_visible(w))
                         .count()
                         .max(1) as u32;
-                    // Minimax renders 5h/7d pairs on one line, so its
-                    // vertical footprint is ~half the window count.
-                    let effective = if r.kind == ProviderKind::Minimax {
-                        visible.div_ceil(2)
-                    } else {
-                        visible
-                    };
+                    let effective = visible;
                     // Score grows with content but is capped so a card
                     // with 30 windows can't monopolize an entire row at
                     // the expense of the others.
