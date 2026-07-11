@@ -463,4 +463,29 @@ mod tests {
         assert_eq!(wk_v.remaining, 21);
         assert_eq!(wk_v.used, 0);
     }
+
+    #[test]
+    fn depleted_window_status_zero_still_renders() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "general",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 0,
+                "current_interval_usage_count": 0,
+                "current_interval_remaining_percent": 0,
+                "current_interval_status": 0,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 0,
+                "current_weekly_status": 0,
+                "weekly_end_time": 0
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        let five = quota.windows.iter().find(|w| w.window_type.starts_with("5h")).expect("5h window");
+        assert_eq!(five.limit, 100);
+        assert_eq!(five.remaining, 0);
+        assert_eq!(five.used, 100);
+    }
 }
