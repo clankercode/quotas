@@ -134,7 +134,6 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         .model_remains
         .iter()
         .find(|m| is_coding(&m.model_name))
-        .or_else(|| resp.model_remains.first())
         .map(|m| m.model_name.clone())
         .unwrap_or_else(|| "MiniMax Coding Plan".to_string());
 
@@ -347,6 +346,28 @@ mod tests {
         assert_eq!(weekly.limit, 1000);
         assert_eq!(weekly.remaining, 850);
         assert_eq!(weekly.used, 150);
+    }
+
+    #[test]
+    fn unknown_models_fall_back_to_static_plan_name() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "image-01",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 10,
+                "current_interval_usage_count": 3,
+                "current_interval_remaining_percent": 100,
+                "current_interval_status": 1,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 100,
+                "current_weekly_status": 1,
+                "weekly_end_time": 0
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiniMax · MiniMax Coding Plan");
     }
 
     #[test]
