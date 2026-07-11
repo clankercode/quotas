@@ -164,6 +164,20 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
                 period_seconds,
             });
+        } else if let Some(pct) = m.current_interval_remaining_percent {
+            let pct = (pct as i64).min(100);
+            let limit: i64 = 100;
+            let remaining = pct;
+            let used = (100 - pct).clamp(0, 100);
+            let label = format!("5h/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
+                period_seconds: Some(18000),
+            });
         }
         // Weekly window — same inverted-naming quirk as the 5h field above.
         if m.weekly_total > 0 {
@@ -184,6 +198,20 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 remaining,
                 reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
                 period_seconds,
+            });
+        } else if let Some(pct) = m.current_weekly_remaining_percent {
+            let pct = (pct as i64).min(100);
+            let limit: i64 = 100;
+            let remaining = pct;
+            let used = (100 - pct).clamp(0, 100);
+            let label = format!("wk/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
+                period_seconds: Some(7 * 86400),
             });
         }
     }
@@ -256,7 +284,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_new_percent_and_status_fields() {
+    fn percent_only_model_emits_two_windows() {
         let body = serde_json::json!({
             "base_resp": {"status_code": 0, "status_msg": ""},
             "model_remains": [{
@@ -273,8 +301,16 @@ mod tests {
                 "weekly_end_time": 0
             }]
         });
-        // No assertion yet — just ensure it deserializes without panicking.
-        let _ = parse_response(&body).unwrap();
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.windows.len(), 2);
+        let five = quota.windows.iter().find(|w| w.window_type.starts_with("5h")).expect("5h window");
+        assert_eq!(five.limit, 100);
+        assert_eq!(five.remaining, 99);
+        assert_eq!(five.used, 1);
+        let weekly = quota.windows.iter().find(|w| w.window_type.starts_with("wk")).expect("wk window");
+        assert_eq!(weekly.limit, 100);
+        assert_eq!(weekly.remaining, 98);
+        assert_eq!(weekly.used, 2);
     }
 
     #[test]
