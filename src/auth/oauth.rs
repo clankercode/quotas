@@ -49,6 +49,72 @@ fn parse_gemini_credentials(content: &str) -> Option<String> {
     parsed.access_token
 }
 
+/// Parse Grok Build's `~/.grok/auth.json`.
+///
+/// Format is a map of account keys → credential objects. Each entry has a
+/// `key` (session/OIDC access token). Prefer the newest non-expired entry;
+/// if all are expired, still return the newest key so the caller can surface
+/// a clear re-auth error from the API.
+pub(crate) fn parse_grok_auth(content: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_str(content).ok()?;
+    let map = root.as_object()?;
+    if map.is_empty() {
+        return None;
+    }
+
+    #[derive(Clone)]
+    struct Candidate {
+        key: String,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+        create_time: Option<chrono::DateTime<chrono::Utc>>,
+    }
+
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (_account, entry) in map {
+        let Some(obj) = entry.as_object() else {
+            continue;
+        };
+        let key = obj
+            .get("key")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let Some(key) = key else {
+            continue;
+        };
+        let expires_at = obj
+            .get("expires_at")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        let create_time = obj
+            .get("create_time")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.with_timezone(&chrono::Utc));
+        candidates.push(Candidate {
+            key,
+            expires_at,
+            create_time,
+        });
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let now = chrono::Utc::now();
+    // Prefer unexpired tokens; among them pick latest create_time / expires_at.
+    candidates.sort_by(|a, b| {
+        let a_fresh = a.expires_at.map(|e| e > now).unwrap_or(true);
+        let b_fresh = b.expires_at.map(|e| e > now).unwrap_or(true);
+        b_fresh
+            .cmp(&a_fresh)
+            .then_with(|| b.create_time.cmp(&a.create_time))
+            .then_with(|| b.expires_at.cmp(&a.expires_at))
+    });
+    candidates.into_iter().next().map(|c| c.key)
+}
+
 pub struct OAuthFileResolver {
     pub file_paths: Vec<PathBuf>,
     pub parse_fn: fn(&str) -> Option<String>,
@@ -95,6 +161,28 @@ impl OAuthFileResolver {
             file_paths: paths,
             parse_fn: parse_gemini_credentials,
             source_name: "gemini".to_string(),
+        }
+    }
+
+    /// Grok Build CLI session token from `~/.grok/auth.json` (or `$GROK_HOME/auth.json`).
+    pub fn grok() -> Self {
+        let mut paths: Vec<PathBuf> = Vec::new();
+        if let Ok(home) = std::env::var("GROK_HOME") {
+            if !home.is_empty() {
+                paths.push(PathBuf::from(home).join("auth.json"));
+            }
+        }
+        if let Some(home) = dirs::home_dir() {
+            paths.push(home.join(".grok/auth.json"));
+        }
+        // XDG config fallback used by some install layouts.
+        if let Some(config) = dirs::config_dir() {
+            paths.push(config.join("grok/auth.json"));
+        }
+        Self {
+            file_paths: paths,
+            parse_fn: parse_grok_auth,
+            source_name: "grok".to_string(),
         }
     }
 }
@@ -171,6 +259,39 @@ mod tests {
     #[test]
     fn parses_gemini_credentials_empty() {
         assert_eq!(parse_gemini_credentials("").as_deref(), None);
+    }
+
+    #[test]
+    fn parses_grok_auth_json_prefers_unexpired() {
+        let json = r#"{
+            "https://auth.x.ai::old": {
+                "key": "expired-token",
+                "expires_at": "2020-01-01T00:00:00Z",
+                "create_time": "2020-01-01T00:00:00Z"
+            },
+            "https://auth.x.ai::new": {
+                "key": "fresh-token",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "create_time": "2026-07-11T00:00:00Z"
+            }
+        }"#;
+        assert_eq!(parse_grok_auth(json).as_deref(), Some("fresh-token"));
+    }
+
+    #[test]
+    fn parses_grok_auth_json_empty_map() {
+        assert_eq!(parse_grok_auth("{}").as_deref(), None);
+    }
+
+    #[test]
+    fn parses_grok_auth_legacy_accounts_key() {
+        // Single-entry map still works even without expires_at.
+        let json = r#"{
+            "https://accounts.x.ai/sign-in": {
+                "key": "session-abc"
+            }
+        }"#;
+        assert_eq!(parse_grok_auth(json).as_deref(), Some("session-abc"));
     }
 
     #[test]

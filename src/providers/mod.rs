@@ -4,6 +4,7 @@ pub mod cursor;
 pub mod deepseek;
 pub mod gemini;
 pub mod github_copilot;
+pub mod grok;
 pub mod kimi;
 pub mod mimo;
 pub mod minimax;
@@ -25,6 +26,7 @@ pub enum ProviderKind {
     DeepSeek,
     Gemini,
     GitHubCopilot,
+    Grok,
     Kimi,
     Mimo,
     Minimax,
@@ -52,6 +54,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GitHubCopilot => "Copilot",
+            ProviderKind::Grok => "Grok",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::Mimo => "MiMo",
             ProviderKind::Minimax => "MiniMax",
@@ -69,6 +72,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GitHubCopilot => "github-copilot",
+            ProviderKind::Grok => "grok",
             ProviderKind::Kimi => "kimi",
             ProviderKind::Mimo => "mimo",
             ProviderKind::Minimax => "minimax",
@@ -86,6 +90,7 @@ impl ProviderKind {
             ProviderKind::DeepSeek,
             ProviderKind::Gemini,
             ProviderKind::GitHubCopilot,
+            ProviderKind::Grok,
             ProviderKind::Kimi,
             ProviderKind::Minimax,
             ProviderKind::OpenRouter,

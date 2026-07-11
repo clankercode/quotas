@@ -215,6 +215,26 @@ fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthReso
             env_auth(&[("OPENROUTER_API_KEY", "openrouter")]),
             key_file_auth(&[".openrouter"], "openrouter"),
         ]),
+        ProviderKind::Grok => multi_auth(vec![
+            // Prefer Grok Build's cached session (same auth as `grok login`).
+            Box::new(OAuthFileResolver::grok()),
+            env_auth(&[
+                ("XAI_MANAGEMENT_KEY", "xai_management"),
+                ("XAI_MGMT_KEY", "xai_mgmt"),
+                ("GROK_MANAGEMENT_KEY", "grok_management"),
+            ]),
+            key_file_auth(
+                &[
+                    ".xai-management-key",
+                    ".xai/management_key",
+                    ".config/xai/management_key",
+                ],
+                "xai-management",
+            ),
+            // Inference API key is last-resort; billing may still reject it.
+            env_auth(&[("XAI_API_KEY", "xai"), ("GROK_CODE_XAI_API_KEY", "grok_code")]),
+            key_file_auth(&[".xai", ".xai-api-key"], "xai"),
+        ]),
         ProviderKind::GitHubCopilot => {
             let mut resolvers = vec![
                 opencode_auth(OpencodeSlot::GitHubCopilot),
@@ -288,6 +308,7 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
         "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
         "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
+        "grok" | "xai" | "x.ai" | "x-ai" | "x_ai" => Some(ProviderKind::Grok),
         "copilot" | "github-copilot" | "github_copilot" | "githubcopilot" => {
             Some(ProviderKind::GitHubCopilot)
         }
@@ -371,6 +392,7 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
         ProviderKind::OpenRouter => {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
+        ProviderKind::Grok => Box::new(quotas::providers::grok::GrokProvider::new(auth)),
         ProviderKind::Mimo => Box::new(quotas::providers::mimo::MimoProvider::new(auth)),
         ProviderKind::GitHubCopilot => {
             Box::new(quotas::providers::github_copilot::GitHubCopilotProvider::new(auth))

@@ -2,7 +2,7 @@
 name = "quotas"
 version = "0.8.3"
 edition = "2021"
-description = "CLI that auto-detects AI provider credentials (Claude, Codex, MiniMax, Kimi, Z.ai) and shows your usage quotas in a TUI or JSON."
+description = "CLI that auto-detects AI provider credentials (Claude, Codex, MiniMax, Kimi, Z.ai, Grok/xAI, …) and shows your usage quotas in a TUI or JSON."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/xertrov/quotas"
 homepage = "https://github.com/xertrov/quotas"

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added **Grok / xAI** provider: reuses Grok Build's `~/.grok/auth.json` session; fetches both monthly $ allowance (`/v1/billing`) and weekly product usage (`/v1/billing?format=credits`); Management API prepaid as fallback. Live fixtures under `tests/fixtures/grok/`.
+
 ## 0.8.3 - 2026-07-07
 
 - Added a subtle colored TUI footer notice when the background startup update check finds a newer release.

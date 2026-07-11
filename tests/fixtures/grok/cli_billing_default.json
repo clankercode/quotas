@@ -1,0 +1,62 @@
+{
+  "config": {
+    "monthlyLimit": {
+      "val": 15000
+    },
+    "used": {
+      "val": 2931
+    },
+    "onDemandCap": {
+      "val": 0
+    },
+    "billingPeriodStart": "2026-07-01T00:00:00+00:00",
+    "billingPeriodEnd": "2026-08-01T00:00:00+00:00",
+    "history": [
+      {
+        "billingCycle": {
+          "year": 2026,
+          "month": 6
+        },
+        "includedUsed": {
+          "val": 0
+        },
+        "onDemandUsed": {
+          "val": 0
+        },
+        "totalUsed": {
+          "val": 0
+        }
+      },
+      {
+        "billingCycle": {
+          "year": 2026,
+          "month": 5
+        },
+        "includedUsed": {
+          "val": 0
+        },
+        "onDemandUsed": {
+          "val": 0
+        },
+        "totalUsed": {
+          "val": 0
+        }
+      },
+      {
+        "billingCycle": {
+          "year": 2026,
+          "month": 4
+        },
+        "includedUsed": {
+          "val": 0
+        },
+        "onDemandUsed": {
+          "val": 0
+        },
+        "totalUsed": {
+          "val": 0
+        }
+      }
+    ]
+  }
+}

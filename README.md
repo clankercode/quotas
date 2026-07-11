@@ -20,6 +20,7 @@ a compact statusline for shell prompts, or filterable JSON.
 | **SiliconFlow** | `SILICONFLOW_API_KEY` → `~/.siliconflow` | `GET /v1/user/info` on `api.siliconflow.cn` |
 | **OpenRouter** | `OPENROUTER_API_KEY` → `~/.openrouter` | `GET /api/v1/credits` on `openrouter.ai` |
 | **GitHub Copilot** | opencode `github-copilot` slot → `GITHUB_COPILOT_TOKEN` → `[github_copilot].token` in config | `GET /copilot_internal/user` on `api.github.com` |
+| **Grok / xAI** (Build monthly credits + API prepaid) | `~/.grok/auth.json` (from `grok login`) → `XAI_MANAGEMENT_KEY` → `XAI_API_KEY` | `GET /v1/billing` on `cli-chat-proxy.grok.com`; fallback Management API prepaid balance |
 
 ## Install
 

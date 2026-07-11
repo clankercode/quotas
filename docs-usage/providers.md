@@ -18,6 +18,7 @@ Research date: 2026-04-13
 | `~`    | **DeepSeek** | Balance only (CNY/USD); no token-quota plan endpoint yet |
 | `~`    | **SiliconFlow** | Balance only (CNY paid + free); no per-model rate windows |
 | `~`    | **OpenRouter** | Credits balance (USD); no per-model rate windows |
+| `x`    | **Grok / xAI** | Grok Build monthly credits via `~/.grok/auth.json` + cli-chat-proxy; Management API prepaid fallback |
 
 ---
 
@@ -40,7 +41,7 @@ Research date: 2026-04-13
 | `[ ]`  | **Cohere** | `api.cohere.com` — free trial credits; PAYG after. No public quota endpoint. |
 | `[ ]`  | **Together AI** | `api.together.xyz` — PAYG credits. Balance via dashboard API (undocumented). |
 | `[ ]`  | **Perplexity AI** | `api.perplexity.ai` — PAYG; monthly credit bundles available. No quota endpoint. |
-| `[ ]`  | **xAI (Grok)** | `api.x.ai` — PAYG + monthly free credits ($25/mo as of 2026). No public quota endpoint documented. |
+| `~`    | **xAI (Grok)** | Implemented via Management API (`management-api.x.ai`) prepaid balance. Requires management key (not inference `XAI_API_KEY`). |
 | `[ ]`  | **Fireworks AI** | `api.fireworks.ai` — PAYG + free trial credits. No public quota/balance API. |
 | `[ ]`  | **Alibaba Qwen (DashScope)** | `dashscope.aliyuncs.com` — CNY PAYG + free quota per model. `/api/v1/quota/me` endpoint exists. |
 | `[ ]`  | **ByteDance Doubao (Ark)** | `ark.cn-beijing.volces.com` — CNY PAYG. Balance via Volcengine dashboard API. |

@@ -230,6 +230,8 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "topped_up_cny" | "topped_up_usd" => "topped-up".to_string(),
         "credits_usd" => "credits".to_string(),
         "key_limit_usd" => "key limit".to_string(),
+        "spend_limit_usd" => "spend limit".to_string(),
+        "on_demand_usd" => "on-demand".to_string(),
         // Cursor-specific short labels
         "api_usage_pct" => "API%".to_string(),
         "auto_usage_pct" => "Auto%".to_string(),
