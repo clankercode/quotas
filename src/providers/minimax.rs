@@ -105,6 +105,14 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         weekly_end_time: i64,
         #[serde(rename = "weekly_start_time", default)]
         weekly_start_time: i64,
+        #[serde(default)]
+        current_interval_remaining_percent: Option<u8>,
+        #[serde(default)]
+        current_interval_status: Option<i32>,
+        #[serde(default)]
+        current_weekly_remaining_percent: Option<u8>,
+        #[serde(default)]
+        current_weekly_status: Option<i32>,
     }
 
     #[derive(Deserialize)]
@@ -126,7 +134,6 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         .model_remains
         .iter()
         .find(|m| is_coding(&m.model_name))
-        .or_else(|| resp.model_remains.first())
         .map(|m| m.model_name.clone())
         .unwrap_or_else(|| "MiniMax Coding Plan".to_string());
 
@@ -156,6 +163,20 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
                 period_seconds,
             });
+        } else if let Some(pct) = m.current_interval_remaining_percent {
+            let pct = (pct as i64).min(100);
+            let limit: i64 = 100;
+            let remaining = pct;
+            let used = 100 - pct;
+            let label = format!("5h/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.end_time).single(),
+                period_seconds: Some(18000),
+            });
         }
         // Weekly window — same inverted-naming quirk as the 5h field above.
         if m.weekly_total > 0 {
@@ -176,6 +197,20 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
                 remaining,
                 reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
                 period_seconds,
+            });
+        } else if let Some(pct) = m.current_weekly_remaining_percent {
+            let pct = (pct as i64).min(100);
+            let limit: i64 = 100;
+            let remaining = pct;
+            let used = 100 - pct;
+            let label = format!("wk/{}", short_model_name(&m.model_name));
+            windows.push(QuotaWindow {
+                window_type: label,
+                used,
+                limit,
+                remaining,
+                reset_at: Utc.timestamp_millis_opt(m.weekly_end_time).single(),
+                period_seconds: Some(7 * 86400),
             });
         }
     }
@@ -246,6 +281,46 @@ impl crate::providers::Provider for MinimaxProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/minimax")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
+
+    #[test]
+    fn percent_only_model_emits_two_windows() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "general",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 0,
+                "current_interval_usage_count": 0,
+                "current_interval_remaining_percent": 99,
+                "current_interval_status": 1,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 98,
+                "current_weekly_status": 1,
+                "weekly_end_time": 0
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.windows.len(), 2);
+        let five = quota.windows.iter().find(|w| w.window_type.starts_with("5h")).expect("5h window");
+        assert_eq!(five.limit, 100);
+        assert_eq!(five.remaining, 99);
+        assert_eq!(five.used, 1);
+        let weekly = quota.windows.iter().find(|w| w.window_type.starts_with("wk")).expect("wk window");
+        assert_eq!(weekly.limit, 100);
+        assert_eq!(weekly.remaining, 98);
+        assert_eq!(weekly.used, 2);
+    }
 
     #[test]
     fn parses_minimax_remains_payload() {
@@ -284,6 +359,28 @@ mod tests {
     }
 
     #[test]
+    fn unknown_models_fall_back_to_static_plan_name() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "image-01",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 10,
+                "current_interval_usage_count": 3,
+                "current_interval_remaining_percent": 100,
+                "current_interval_status": 1,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 100,
+                "current_weekly_status": 1,
+                "weekly_end_time": 0
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiniMax · MiniMax Coding Plan");
+    }
+
+    #[test]
     fn coding_plan_model_sorts_first() {
         let body = serde_json::json!({
             "base_resp": {"status_code": 0, "status_msg": ""},
@@ -314,5 +411,81 @@ mod tests {
         assert!(quota.plan_name.contains("M2.7"));
         // Coding-plan model's window first.
         assert_eq!(quota.windows[0].limit, 100);
+    }
+
+    #[test]
+    fn parses_live_fixture_mixed_count_and_percent() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut body = fixture("coding_plan_remains_live.json");
+        for m in body["model_remains"].as_array_mut().unwrap() {
+            m["start_time"] = serde_json::json!(now - 3_600_000);
+            m["end_time"] = serde_json::json!(now + 4 * 3_600_000);
+            m["weekly_start_time"] = serde_json::json!(now - 6 * 86_400_000);
+            m["weekly_end_time"] = serde_json::json!(now + 86_400_000);
+        }
+        let quota = parse_response(&body).unwrap();
+        assert_eq!(quota.plan_name, "MiniMax · MiniMax Coding Plan");
+        assert_eq!(quota.windows.len(), 4);
+
+        let five_g = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h/general")
+            .expect("5h/general");
+        assert_eq!(five_g.limit, 100);
+        assert_eq!(five_g.remaining, 99);
+        assert_eq!(five_g.used, 1);
+
+        let wk_g = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "wk/general")
+            .expect("wk/general");
+        assert_eq!(wk_g.limit, 100);
+        assert_eq!(wk_g.remaining, 98);
+        assert_eq!(wk_g.used, 2);
+
+        let five_v = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h/video")
+            .expect("5h/video");
+        assert_eq!(five_v.limit, 3);
+        assert_eq!(five_v.remaining, 3);
+        assert_eq!(five_v.used, 0);
+
+        let wk_v = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "wk/video")
+            .expect("wk/video");
+        assert_eq!(wk_v.limit, 21);
+        assert_eq!(wk_v.remaining, 21);
+        assert_eq!(wk_v.used, 0);
+    }
+
+    #[test]
+    fn depleted_window_status_zero_still_renders() {
+        let body = serde_json::json!({
+            "base_resp": {"status_code": 0, "status_msg": ""},
+            "model_remains": [{
+                "model_name": "general",
+                "start_time": 0, "end_time": 1, "remains_time": 0,
+                "current_interval_total_count": 0,
+                "current_interval_usage_count": 0,
+                "current_interval_remaining_percent": 0,
+                "current_interval_status": 0,
+                "current_weekly_total_count": 0,
+                "current_weekly_usage_count": 0,
+                "current_weekly_remaining_percent": 0,
+                "current_weekly_status": 0,
+                "weekly_end_time": 0
+            }]
+        });
+        let quota = parse_response(&body).unwrap();
+        let five = quota.windows.iter().find(|w| w.window_type.starts_with("5h")).expect("5h window");
+        assert_eq!(five.limit, 100);
+        assert_eq!(five.remaining, 0);
+        assert_eq!(five.used, 100);
     }
 }

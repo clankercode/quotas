@@ -1,20 +1,20 @@
  quotas    page 1/2
  ←↑↓→ Nav  Enter Detail  R Refresh  C Copy  PgUp/PgDn Page  [x] Auto  Q Quit  ·
 ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│ ▶ Copilot  Updated 3s ago ✓         │ │   Kimi  Updated 3s ago ⚡           │
-│ Business                            │ │ Kimi Coding Plan                    │
-│ month  2% (6/300)▒▒▒▒▒░░░░░░░░░░░░░ │ │ 5h     0% (0/100)▒▒▒▒▒▒▒▒▒▒▒▒▒░░░░░ │
-│        resets in 13d 10h            │ │ 7d     ██████████████100% (100/100) │
+│ ▶ Grok  Updated 11s ago ⚡          │ │   Kimi  Updated 11s ago ✓           │
+│ Grok Build                          │ │ Kimi Coding Plan                    │
+│ …kly/build ██████████100% (100/100) │ │ 5h     0% (0/100)░░░░░░░░░░░░░░░░░░ │
+│ month      26% (390k/1.5M)░░░░░░░░░ │ │ 7d     0% (0/100)▒▒▒▒▒▒▒▒▒▒░░░░░░░░ │
 │                                     │ │                                     │
-│  ✓ all pacing ahead                 │ │                                     │
+│                                     │ │                                     │
 └─────────────────────────────────────┘ └─────────────────────────────────────┘
 ┌─────────────────────────────────────┐ ┌─────────────────────────────────────┐
-│   Z.ai  Updated 3s ago              │ │   Cursor  Updated 3s ago            │
-│ Z.ai max                            │ │ Pro                                 │
-│ 5h     1% (1/100)░░░░░░░░░░░░░░░░░░ │ │ API%   ██████████████100% (10k/10k) │
-│        resets in 4h 59m             │ │ Auto%  ██████████████86% (8.6k/10k) │
-│ MCP    █████38% (1.5k/4k)░░░░░░░░░░ │ │ Bonus  0% (0/16k)░░░░░░░░░░░░░░░░░░ │
-│        resets in 13d 0h             │ │                                     │
+│   Z.ai  Updated 11s ago ✓           │ │   Claude  Updated 11s ago ⚡        │
+│ Z.ai max                            │ │ Claude (Max/Pro)                    │
+│ 5h     1% (1/100)▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒░░░ │ │ 5h       20% (20/100)▒▒▒▒▒░░░░░░░░░ │
+│        resets in 27m                │ │ 7d       █████████57% (57/100)░░░░░ │
+│ MCP    0% (0/4k)░░░░░░░░░░░░░░░░░░░ │ │ 7d Fable ██████████████87% (87/100) │
+│        resets in 20d 3h             │ │                                     │
 │                                     │ │                                     │
 └─────────────────────────────────────┘ └─────────────────────────────────────┘
-8 of 8 loaded  ·  No key: DeepSeek, OpenRouter, SiliconFlow
+6 of 6 loaded  ·  No key: Cursor, DeepSeek, Gemini, Copilot, OpenRouter, Silicon

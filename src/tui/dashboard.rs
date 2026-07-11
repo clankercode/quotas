@@ -60,7 +60,6 @@ pub struct Dashboard {
     pub detail_scroll: u16,
     pub spinner_frame: usize,
     pub show_all_windows: bool,
-    pub vertical_spanning: bool,
     pub auto_refresh_enabled: bool,
     pub update_info: Option<UpdateInfo>,
     favorite_providers: BTreeSet<String>,
@@ -92,7 +91,6 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
-            vertical_spanning: false,
             auto_refresh_enabled: true,
             update_info: None,
             favorite_providers: BTreeSet::new(),
@@ -122,7 +120,6 @@ impl Dashboard {
             detail_scroll: 0,
             spinner_frame: 0,
             show_all_windows: false,
-            vertical_spanning: false,
             auto_refresh_enabled: true,
             update_info: None,
             favorite_providers: BTreeSet::new(),
@@ -507,14 +504,12 @@ impl Dashboard {
     }
 
     /// Assigns each card in `page_order` a (row, col, span) placement.
-    /// MiniMax spans 2 columns; all other cards span 1.
-    /// When `allow_spanning` is true, MiniMax also spans 2 rows (2×2).
-    /// Cards wrap to the next row when they would overflow `cols`.
+    /// All cards span 1 column and 1 row; cards wrap to the next row on overflow.
     fn flow_placements(
-        entries: &[ProviderEntry],
+        _entries: &[ProviderEntry],
         page_order: &[usize],
         cols: usize,
-        allow_spanning: bool,
+        _allow_spanning: bool,
     ) -> Vec<(usize, usize, usize)> {
         if cols == 0 || page_order.is_empty() {
             return Vec::new();
@@ -526,13 +521,9 @@ impl Dashboard {
         let mut out = Vec::with_capacity(page_order.len());
         let mut scan_row = 0usize;
 
-        for &entry_idx in page_order {
-            let is_minimax = matches!(&entries[entry_idx],
-                ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
-                    if r.kind == ProviderKind::Minimax);
-
-            let span = if is_minimax { 2 } else { 1 }.min(cols);
-            let row_span = if is_minimax && allow_spanning { 2 } else { 1 };
+        for &_entry_idx in page_order {
+            let span = 1usize.min(cols);
+            let row_span = 1usize;
 
             // Find the first (row, col) where all span×row_span cells are free.
             let mut placed = false;
@@ -590,7 +581,7 @@ impl Dashboard {
                 &self.entries,
                 &self.stable_order[..total],
                 cols,
-                self.vertical_spanning,
+                false,
             )
             .iter()
             .map(|(r, _, _)| r + 1)
@@ -613,7 +604,7 @@ impl Dashboard {
             for k in 1..=n.min(self.stable_order.len()) {
                 let slice = &self.stable_order[..k];
                 let placements =
-                    Self::flow_placements(&self.entries, slice, cols, self.vertical_spanning);
+                    Self::flow_placements(&self.entries, slice, cols, false);
                 let nr = placements.iter().map(|(r, _, _)| r + 1).max().unwrap_or(0);
                 if nr > max_rows {
                     break;
@@ -838,7 +829,7 @@ impl Dashboard {
             &self.entries,
             &order[page_start..page_end],
             cols,
-            self.vertical_spanning,
+            false,
         );
         let num_rows = placements
             .iter()
@@ -932,15 +923,7 @@ impl Dashboard {
                     // 2 border + 1 header (name+freshness) + 1 plan name
                     let fixed: u16 = 4;
                     // +1 for footer_reserve that render_done_card always subtracts.
-                    let content: u16 = if r.kind == ProviderKind::Minimax {
-                        // 2-col render: 1 col-header row + 1 row per model pair
-                        // + 1 reset-period footer row per unique period.
-                        let model_rows = visible.div_ceil(2) as u16;
-                        1 + model_rows + 2 // 2 reset lines (one per period)
-                    } else {
-                        // TwoLine: 2 lines per window (bar + reset).
-                        (visible as u16) * 2 + 1
-                    };
+                    let content: u16 = (visible as u16) * 2 + 1;
                     (fixed + content).max(MIN_CARD_H)
                 }
                 // Auth-required cards are squat indicator boxes: just border +
@@ -962,13 +945,7 @@ impl Dashboard {
                         .filter(|w| self.window_visible(w))
                         .count()
                         .max(1) as u32;
-                    // Minimax renders 5h/7d pairs on one line, so its
-                    // vertical footprint is ~half the window count.
-                    let effective = if r.kind == ProviderKind::Minimax {
-                        visible.div_ceil(2)
-                    } else {
-                        visible
-                    };
+                    let effective = visible;
                     // Score grows with content but is capped so a card
                     // with 30 windows can't monopolize an entire row at
                     // the expense of the others.
@@ -1147,14 +1124,6 @@ impl Dashboard {
                 lines.push(Line::from(
                     Span::raw(quota.plan_name.clone()).italic().dim(),
                 ));
-
-                if result.kind == ProviderKind::Minimax {
-                    render_minimax_windows(&mut lines, &quota.windows, inner.width);
-                    let paragraph = Paragraph::new(Text::from(lines))
-                        .alignment(ratatui::layout::Alignment::Left);
-                    f.render_widget(paragraph, inner);
-                    return;
-                }
 
                 let mut visible: Vec<&QuotaWindow> = quota
                     .windows
@@ -1440,135 +1409,6 @@ fn pick_layout(total: usize, usable_lines: usize) -> (RenderMode, usize) {
     // the last line for the "+ N more" indicator (the caller already
     // subtracted that line from usable_lines).
     (RenderMode::OneLine, one_fits.min(total))
-}
-
-/// MiniMax-specific card body: pair each model's 5h and 7d windows onto
-/// a single row `label | 5h bar | 7d bar`, so both periods are visible
-/// at once and the full-width card isn't mostly dead space.
-fn render_minimax_windows(lines: &mut Vec<Line<'_>>, windows: &[QuotaWindow], inner_w: u16) {
-    // Preserve input order of first sighting so the provider's ranking
-    // (coding plans first, then everything else) survives.
-    let mut order: Vec<String> = Vec::new();
-    let mut pairs: std::collections::HashMap<String, (Option<&QuotaWindow>, Option<&QuotaWindow>)> =
-        std::collections::HashMap::new();
-
-    for w in windows {
-        let (model, is_five) = if let Some(rest) = w.window_type.strip_prefix("5h/") {
-            (rest.to_string(), true)
-        } else if let Some(rest) = w.window_type.strip_prefix("wk/") {
-            (rest.to_string(), false)
-        } else if let Some(rest) = w.window_type.strip_prefix("7d/") {
-            (rest.to_string(), false)
-        } else {
-            continue;
-        };
-        if !pairs.contains_key(&model) {
-            order.push(model.clone());
-        }
-        let slot = pairs.entry(model).or_insert((None, None));
-        if is_five {
-            slot.0 = Some(w);
-        } else {
-            slot.1 = Some(w);
-        }
-    }
-
-    if order.is_empty() {
-        return;
-    }
-
-    // Fit label_w + 2 bars (min 10 each) + spacing into inner_w.
-    // Desired label_w is 24; shrink it if the card is narrow.
-    // min_needed = label + 1 (space) + bar*2 + 2 (gap) = label + 2*10 + 3 = label + 23
-    // → label_max = inner_w.saturating_sub(23)
-    let label_w: usize = 24usize.min(inner_w.saturating_sub(23) as usize).max(8);
-    // Reserve: label + trailing space + gap between bars (2 chars).
-    let reserved = label_w as u16 + 1 + 2;
-    let avail = inner_w.saturating_sub(reserved);
-    let bar_w: u16 = (avail / 2).clamp(10, 90);
-
-    // Column header row.
-    let header_5h = format!("{:^w$}", "── 5h ──", w = bar_w as usize);
-    let header_7d = format!("{:^w$}", "── 7d ──", w = bar_w as usize);
-    lines.push(Line::from(vec![
-        Span::raw(format!("{:<w$} ", "", w = label_w)),
-        Span::raw(header_5h).dim(),
-        Span::raw("  "),
-        Span::raw(header_7d).dim(),
-    ]));
-
-    // Collect reset times for the two period columns while rendering.
-    let mut reset_5h: Option<chrono::DateTime<chrono::Utc>> = None;
-    let mut reset_7d: Option<chrono::DateTime<chrono::Utc>> = None;
-
-    for model in &order {
-        let (five, seven) = pairs.get(model).copied().unwrap_or((None, None));
-        let label = bar::truncate_suffix(model, label_w);
-        let mut spans: Vec<Span<'_>> = vec![Span::raw(format!("{:<w$} ", label, w = label_w))];
-
-        spans.extend(minimax_bar_cell(five, bar_w));
-        spans.push(Span::raw("  "));
-        spans.extend(minimax_bar_cell(seven, bar_w));
-
-        lines.push(Line::from(spans));
-
-        if reset_5h.is_none() {
-            if let Some(w) = five {
-                reset_5h = w.reset_at;
-            }
-        }
-        if reset_7d.is_none() {
-            if let Some(w) = seven {
-                reset_7d = w.reset_at;
-            }
-        }
-    }
-
-    // Footer: show reset times for each period, grouped (all models share
-    // the same window boundary for a given period).
-    let pad = format!("{:<w$} ", "", w = label_w);
-    if reset_5h.is_some() || reset_7d.is_some() {
-        let mut footer_spans: Vec<Span<'_>> = vec![Span::raw(pad.clone())];
-        if let Some(t) = reset_5h {
-            let rel = humanize_reset(t - chrono::Utc::now());
-            footer_spans.push(
-                Span::raw(format!(
-                    "{:^w$}",
-                    format!("5h resets in {}", rel),
-                    w = bar_w as usize
-                ))
-                .dim(),
-            );
-        } else {
-            footer_spans.push(Span::raw(format!("{:w$}", "", w = bar_w as usize)));
-        }
-        footer_spans.push(Span::raw("  "));
-        if let Some(t) = reset_7d {
-            let rel = humanize_reset(t - chrono::Utc::now());
-            footer_spans.push(
-                Span::raw(format!(
-                    "{:^w$}",
-                    format!("7d resets in {}", rel),
-                    w = bar_w as usize
-                ))
-                .dim(),
-            );
-        }
-        lines.push(Line::from(footer_spans));
-    }
-}
-
-fn minimax_bar_cell(win: Option<&QuotaWindow>, bar_w: u16) -> Vec<Span<'static>> {
-    match win {
-        Some(w) if w.limit > 0 => {
-            let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
-            let time_elapsed = bar::time_elapsed_fraction(w);
-            let color = bar::bar_color(used_pct);
-            let overlay = bar_overlay_text(used_pct, w.used, w.limit, bar_w as usize);
-            bar::build_labeled(used_pct, time_elapsed, bar_w, color, &overlay)
-        }
-        _ => vec![Span::raw(format!("{:w$}", "", w = bar_w as usize))],
-    }
 }
 
 /// Worst pace diff (used% - elapsed%) across visible windows, or None if

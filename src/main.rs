@@ -899,7 +899,6 @@ fn snap_page_output_path(path: &str, page_number: usize) -> PathBuf {
 
 fn apply_dashboard_config(dashboard: &mut Dashboard, config: &Config) {
     dashboard.show_all_windows = config.ui.show_all_windows;
-    dashboard.vertical_spanning = config.ui.vertical_spanning;
     dashboard.auto_refresh_enabled = config.tui.auto_refresh;
     for provider in &config.favorites.providers {
         dashboard.set_provider_favorite(provider, true);

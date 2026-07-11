@@ -341,3 +341,37 @@ aesthetic and would need a more invasive layout rework to eliminate.
       as an alert indicator.
 - [ ] Credits window (claude extra_credits) has no reset_at — consider
       displaying "no expiry" or just dropping the reset line.
+
+## Iter 10 — MiniMax payload update
+
+**What shipped to this capture**
+- MiniMax parser handles new payload fields: `*_remaining_percent` (used
+  to synthesise `limit=100` windows when `total_count=0`) and `*_status`
+  (deserialised, not yet rendered).
+- `plan_name` falls back to static `"MiniMax Coding Plan"` when neither
+  `minimax-m*` nor `coding-plan*` model names appear in `model_remains`.
+  Replaces the prior behaviour of using the first unrelated model's name.
+- Wide-MiniMax hack removed from `dashboard.rs`:
+  `render_minimax_windows` / `minimax_bar_cell` deleted;
+  `is_minimax` branches dropped from `flow_placements`, `natural_card_height`,
+  `card_weight`. MiniMax now flows like every other provider (1-col, generic
+  stacked window rendering).
+- `vertical_spanning` config + CLI flag + `Dashboard` field all removed.
+
+**Observations**
+1. MiniMax card now sits in the normal flow at 1-col, showing four stacked
+   windows: `5h/general` (1%), `5h/video` (0%), `wk/general` (2%),
+   `wk/video` (0%). Reset times line up per-period.
+2. Plan header reads `MiniMax · MiniMax Coding Plan` (static fallback).
+3. Card height grew vs prior paired-row layout (now ~9 rows for 4 windows
+   instead of ~5 with paired bars). Other cards reshuffle slightly to
+   fit on the same page count.
+4. No neighbour regressions: Grok, Claude, Codex, Kimi, Z.ai all render
+   identically to iter 9.
+
+**Captures**
+- `screenshots/before-bpayload.txt` — baseline (MiniMax cards empty,
+  parser bug)
+- `screenshots/after-bpayload.txt` — post-update (4 windows, static plan)
+- `screenshots/snap-{80x20,80x30,120x40,160x50,200x60}.{txt,ansi}` —
+  full 5-size set refreshed
