@@ -132,7 +132,7 @@ Test list:
   - Coding-plan prioritization: video or general sorted first per current `is_coding` logic — for the new payload, neither matches, so order is preserved as in the fixture (general first).
 - `depleted_window_status_zero_still_renders` — synthetic body with `current_interval_status: 0`, `current_interval_remaining_percent: 0`, `total_count: 0` → asserts a window with `used = 100, remaining = 0, limit = 100` exists.
 - `unknown_models_fall_back_to_static_plan_name` — synthetic body with only `image-01` model → asserts `quota.plan_name == "MiniMax · MiniMax Coding Plan"`.
-- `parses_count_based_payload_retrocompat` — synthetic body matching the historical `MiniMax-M2.7` shape (count-based, no percent fields) → asserts the legacy windows still parse to the same `used`/`remaining`/`limit` as before. Pins the regression boundary.
+- `parses_count_based_payload_retrocompat` — covered by the existing `parses_minimax_remains_payload` test in `src/providers/minimax.rs::tests` (count-based `MiniMax-M2.7` body with `used=13, remaining=187, limit=200` expectations). It runs against the count branch unchanged and pins the regression boundary.
 
 ## Verification
 
