@@ -146,6 +146,8 @@ struct NextUpgrade {
 struct UsageResponse {
     #[serde(default, rename = "billingCycleEnd")]
     billing_cycle_end: Option<String>,
+    #[serde(default, rename = "billingCycleStart")]
+    billing_cycle_start: Option<String>,
     #[serde(default, rename = "planUsage")]
     plan_usage: Option<PlanUsage>,
     #[serde(default, rename = "spendLimitUsage")]
@@ -185,6 +187,23 @@ fn parse_quota(
 
     let mut windows = Vec::new();
 
+    // All Cursor usage resets at the billing-cycle boundary, so stamp every
+    // window with the same reset timestamp (and elapsed period, so the card's
+    // pace overlay works). Timestamps are millisecond epochs.
+    let parse_ms = |ts: &str| {
+        ts.parse::<i64>()
+            .ok()
+            .map(|ms| DateTime::from_timestamp(ms / 1000, 0).unwrap_or_else(Utc::now))
+    };
+    let reset_at = usage.billing_cycle_end.as_deref().and_then(parse_ms);
+    let period_seconds = match (
+        usage.billing_cycle_start.as_deref().and_then(parse_ms),
+        reset_at,
+    ) {
+        (Some(start), Some(end)) => Some((end - start).num_seconds().max(0)),
+        _ => None,
+    };
+
     // Billing cycle spend window from planUsage
     if let Some(plan_usage) = &usage.plan_usage {
         let included_spend = plan_usage.included_spend.unwrap_or(0.0) as i64;
@@ -194,20 +213,13 @@ fn parse_quota(
         let limit = included_spend;
         let remaining = limit.saturating_sub(used);
 
-        // Parse billing cycle end as timestamp
-        let reset_at = usage.billing_cycle_end.and_then(|ts| {
-            ts.parse::<i64>()
-                .ok()
-                .map(|ms| DateTime::from_timestamp(ms / 1000, 0).unwrap_or_else(Utc::now))
-        });
-
         windows.push(QuotaWindow {
             window_type: "billing_cycle".to_string(),
             used,
             limit,
             remaining,
             reset_at,
-            period_seconds: None,
+            period_seconds,
         });
 
         // Show bonus as a separate window
@@ -217,8 +229,8 @@ fn parse_quota(
                 used: 0,
                 limit: bonus_spend,
                 remaining: bonus_spend,
-                reset_at: None,
-                period_seconds: None,
+                reset_at,
+                period_seconds,
             });
         }
     }
@@ -235,8 +247,8 @@ fn parse_quota(
                 used,
                 limit,
                 remaining,
-                reset_at: None,
-                period_seconds: None,
+                reset_at,
+                period_seconds,
             });
         }
     }
@@ -249,8 +261,8 @@ fn parse_quota(
                 used: (api_pct * 100.0) as i64,
                 limit: 10000, // percentage * 100
                 remaining: ((100.0 - api_pct) * 100.0) as i64,
-                reset_at: None,
-                period_seconds: None,
+                reset_at,
+                period_seconds,
             });
         }
         if let Some(auto_pct) = plan_usage.auto_percent_used {
@@ -259,8 +271,8 @@ fn parse_quota(
                 used: (auto_pct * 100.0) as i64,
                 limit: 10000,
                 remaining: ((100.0 - auto_pct) * 100.0) as i64,
-                reset_at: None,
-                period_seconds: None,
+                reset_at,
+                period_seconds,
             });
         }
     }
@@ -305,5 +317,67 @@ impl crate::providers::Provider for CursorProvider {
 
     fn auth_resolver(&self) -> &dyn AuthResolver {
         &*self.auth
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cursor")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
+
+    #[test]
+    fn parses_cursor_live_fixture_with_resets() {
+        let plan = fixture("plan_default.json");
+        let usage = fixture("usage_default.json");
+        let quota = parse_quota(&plan, &usage).unwrap();
+
+        assert_eq!(quota.plan_name, "Pro");
+
+        // Every emitted window carries the billing-cycle reset + elapsed period
+        // so the card can show "resets in X" and a pace overlay.
+        let expected_reset = DateTime::from_timestamp(1785957659, 0).unwrap();
+        let expected_period = 1785957659 - 1783279259; // end - start (seconds)
+        assert!(!quota.windows.is_empty());
+        for w in &quota.windows {
+            assert_eq!(
+                w.reset_at,
+                Some(expected_reset),
+                "{} missing reset_at",
+                w.window_type
+            );
+            assert_eq!(
+                w.period_seconds,
+                Some(expected_period),
+                "{} missing period_seconds",
+                w.window_type
+            );
+        }
+
+        let auto = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "auto_usage_pct")
+            .expect("auto_usage_pct window");
+        assert_eq!(auto.used, 2201); // 22.0133% * 100
+        assert_eq!(auto.limit, 10000);
+
+        let api = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "api_usage_pct")
+            .expect("api_usage_pct window");
+        assert_eq!(api.used, 0);
+
+        // Live spendLimitUsage has no individualLimit -> no spend_limit window.
+        assert!(!quota.windows.iter().any(|w| w.window_type == "spend_limit"));
     }
 }

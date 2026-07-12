@@ -1,0 +1,46 @@
+{
+  "autoBucketModels": [
+    "default",
+    "composer-1.5",
+    "composer-2",
+    "composer-2-fast",
+    "composer-2.5",
+    "composer-2.5-fast",
+    "vega",
+    "grok-4.5",
+    "vega-medium",
+    "vega-high",
+    "vega-xhigh",
+    "vega-fast-medium",
+    "vega-fast-high",
+    "vega-fast-xhigh",
+    "grok-4.5-medium",
+    "grok-4.5-fast-medium",
+    "grok-4.5-high",
+    "grok-4.5-fast-high",
+    "grok-4.5-xhigh",
+    "grok-4.5-fast-xhigh",
+    "composer-1"
+  ],
+  "autoModelSelectedDisplayMessage": "You've used 17% of your included total usage",
+  "billingCycleEnd": "1785957659000",
+  "billingCycleStart": "1783279259000",
+  "displayMessage": "You've hit your usage limit",
+  "displayThreshold": 200,
+  "enabled": true,
+  "namedModelSelectedDisplayMessage": "You've used 0% of your included API usage",
+  "planUsage": {
+    "apiPercentUsed": 0,
+    "autoPercentUsed": 22.013333333333332,
+    "bonusSpend": 1302,
+    "bonusTooltip": "We work with model providers to give you free usage beyond what you've purchased. Amounts may vary.",
+    "includedSpend": 2000,
+    "limit": 2000,
+    "remainingBonus": false,
+    "totalPercentUsed": 16.933333333333334,
+    "totalSpend": 3302
+  },
+  "spendLimitUsage": {
+    "limitType": "user"
+  }
+}

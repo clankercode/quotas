@@ -1,0 +1,16 @@
+{
+  "nextUpgrade": {
+    "description": "Unlock 3x more usage on Agent & more",
+    "includedAmountCents": 7000,
+    "name": "Pro+",
+    "price": "$60/mo",
+    "tier": "pro_plus"
+  },
+  "planInfo": {
+    "billingCycleEnd": "1785957659000",
+    "includedAmountCents": 2000,
+    "planName": "Pro",
+    "planOwner": "PLAN_OWNER_STRIPE",
+    "price": "$20/mo"
+  }
+}
