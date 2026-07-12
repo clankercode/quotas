@@ -2,7 +2,7 @@ use crate::auth::AuthResolver;
 use crate::providers::{ProviderKind, ProviderQuota, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use reqwest::Client;
 
 pub struct KimiProvider {
@@ -94,7 +94,7 @@ impl KimiProvider {
         let body: serde_json::Value = resp.json().await?;
 
         if status.as_u16() == 200 {
-            let quota = parse_coding_response(&body);
+            let quota = parse_coding_response(&body, Utc::now());
             return Ok(ProviderResult {
                 kind: ProviderKind::Kimi,
                 status: ProviderStatus::Available { quota },
@@ -129,7 +129,23 @@ fn parse_reset(v: &serde_json::Value) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
+/// Next calendar-month boundary at 00:00 UTC (1st of next month). Used
+/// as the default reset anchor for the monthly `totalQuota` window
+/// since the `/usages` endpoint doesn't return a server-side reset
+/// timestamp for it. Standard subscription convention is a calendar
+/// month; the user's actual billing day is not exposed in the response.
+fn next_month_reset(now: DateTime<Utc>) -> DateTime<Utc> {
+    let (year, month) = if now.month() == 12 {
+        (now.year() + 1, 1)
+    } else {
+        (now.year(), now.month() + 1)
+    };
+    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
+        .single()
+        .expect("1st of any month at 00:00 UTC is always a valid DateTime")
+}
+
+pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>) -> ProviderQuota {
     let usage = body.get("usage").cloned().unwrap_or_default();
     let limits = body
         .get("limits")
@@ -236,8 +252,12 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
     // the monthly cap is exhausted and Kimi Code is frozen. Collapse the
     // window to a binary state so the bar renders fully red (exhausted)
     // or fully green (available) instead of an unhelpful 1% / 50% bar.
-    // The server also returns no reset timestamp, so the bar renders
-    // without pacing or a "resets in X" hint.
+    //
+    // The server returns no reset timestamp, so synthesize one at the
+    // standard calendar-month boundary (1st of next month, 00:00 UTC).
+    // This drives the "resets in Xd Yh" hint under the bar. `period_seconds`
+    // stays None so the binary bar doesn't get an overspend/slack overlay
+    // based on elapsed calendar time — the binary state isn't pacing data.
     if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
         let total_value = serde_json::Value::Object(total.clone());
         let raw_limit = num_field(&total_value, "limit");
@@ -257,7 +277,7 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value) -> ProviderQuota {
                 used: i64::from(exhausted),
                 limit: 1,
                 remaining: i64::from(!exhausted),
-                reset_at: None,
+                reset_at: Some(next_month_reset(now)),
                 period_seconds: None,
             });
         }
@@ -296,6 +316,17 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    /// Fixed "now" used across the test suite so the synthesized
+    /// calendar-month reset is deterministic. Mid-July 2026 keeps it
+    /// near the live fixture's capture date so the assertions stay
+    /// readable. `parse_from_rfc3339` isn't const-stable, so we wrap
+    /// in a function — parse cost is negligible for tests.
+    fn now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-07-12T10:00:00+00:00")
+            .expect("invalid NOW constant")
+            .with_timezone(&Utc)
+    }
+
     fn fixture(name: &str) -> serde_json::Value {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/kimi")
@@ -312,7 +343,7 @@ mod tests {
         // `reset_at`), plus the TIME_UNIT_-prefixed time unit. The parser
         // accepts both via num_field() / trim_start_matches("TIME_UNIT_").
         let body = fixture("coding_usages_default.json");
-        let quota = parse_coding_response(&body);
+        let quota = parse_coding_response(&body, now());
 
         assert_eq!(quota.plan_name, "Kimi Coding Plan");
 
@@ -344,6 +375,9 @@ mod tests {
         // The raw value is "any usage at all" — `used=1` of the
         // meaningless 100-limit collapses to a binary exhausted
         // signal so the bar renders fully red instead of 1% green.
+        // The reset timestamp is synthesized to the next calendar
+        // month boundary (1st of next month, 00:00 UTC) so the bar
+        // shows a "resets in Xd Yh" hint.
         let total = quota
             .windows
             .iter()
@@ -352,13 +386,15 @@ mod tests {
         assert_eq!(total.limit, 1, "raw 100-limit collapsed to binary 1");
         assert_eq!(total.used, 1, "non-zero used => exhausted");
         assert_eq!(total.remaining, 0);
-        assert!(
-            total.reset_at.is_none(),
-            "totalQuota carries no server-provided reset timestamp"
+        // NOW is 2026-07-12 → next month is August 2026.
+        assert_eq!(
+            total.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc)),
+            "synthesized calendar-month reset at next month 1st, 00:00 UTC"
         );
         assert!(
             total.period_seconds.is_none(),
-            "no period_seconds without a reset hint; bar renders without pacing"
+            "binary window: no period_seconds so the bar doesn't draw overspend/slack against elapsed calendar time"
         );
     }
 
@@ -372,7 +408,7 @@ mod tests {
             "limits": [],
             "totalQuota": {"limit": "100", "used": "0", "remaining": "100"}
         });
-        let quota = parse_coding_response(&body);
+        let quota = parse_coding_response(&body, now());
         let total = quota
             .windows
             .iter()
@@ -381,6 +417,10 @@ mod tests {
         assert_eq!(total.limit, 1);
         assert_eq!(total.used, 0);
         assert_eq!(total.remaining, 1);
+        assert_eq!(
+            total.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))
+        );
     }
 
     #[test]
@@ -398,18 +438,19 @@ mod tests {
             "limits": [],
             "totalQuota": {"limit": "100", "used": "50", "remaining": "50"}
         });
-        let total_low = parse_coding_response(&body_low)
+        let total_low = parse_coding_response(&body_low, now())
             .windows
             .into_iter()
             .find(|w| w.window_type == "total_quota")
             .expect("total_quota window (low)");
-        let total_high = parse_coding_response(&body_high)
+        let total_high = parse_coding_response(&body_high, now())
             .windows
             .into_iter()
             .find(|w| w.window_type == "total_quota")
             .expect("total_quota window (high)");
         assert_eq!((total_low.limit, total_low.used, total_low.remaining), (1, 1, 0));
         assert_eq!((total_high.limit, total_high.used, total_high.remaining), (1, 1, 0));
+        assert_eq!(total_low.reset_at, total_high.reset_at);
     }
 
     #[test]
@@ -423,7 +464,7 @@ mod tests {
             "limits": [],
             "totalQuota": {"limit": "100", "remaining": "99"}
         });
-        let total = parse_coding_response(&body)
+        let total = parse_coding_response(&body, now())
             .windows
             .into_iter()
             .find(|w| w.window_type == "total_quota")
@@ -431,6 +472,10 @@ mod tests {
         assert_eq!(total.limit, 1);
         assert_eq!(total.used, 1, "remaining<limit => exhausted");
         assert_eq!(total.remaining, 0);
+        assert_eq!(
+            total.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))
+        );
     }
 
     #[test]
@@ -444,7 +489,7 @@ mod tests {
                 "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}
             }]
         });
-        let quota = parse_coding_response(&body);
+        let quota = parse_coding_response(&body, now());
         assert_eq!(quota.windows.len(), 2);
         assert!(!quota.windows.iter().any(|w| w.window_type == "total_quota"));
     }
@@ -469,7 +514,7 @@ mod tests {
                 "window": {"duration": 300, "timeUnit": "MINUTE"}
             }]
         });
-        let quota = parse_coding_response(&body);
+        let quota = parse_coding_response(&body, now());
         assert_eq!(quota.windows.len(), 2);
         let weekly = &quota.windows[0];
         assert_eq!(weekly.window_type, "weekly");
@@ -481,5 +526,49 @@ mod tests {
         assert_eq!(five.window_type, "5h");
         assert_eq!(five.used, 50_000);
         assert_eq!(five.remaining, 150_000);
+    }
+
+    #[test]
+    fn next_month_reset_returns_first_of_next_month_mid_month() {
+        let now = DateTime::parse_from_rfc3339("2026-07-12T10:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = next_month_reset(now);
+        assert_eq!(
+            reset,
+            DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn next_month_reset_rolls_year_on_december() {
+        let now = DateTime::parse_from_rfc3339("2026-12-31T23:59:59+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = next_month_reset(now);
+        assert_eq!(
+            reset,
+            DateTime::parse_from_rfc3339("2027-01-01T00:00:00+00:00")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
+    #[test]
+    fn next_month_reset_on_first_day_returns_next_month() {
+        // Exactly at the boundary — the current cycle just reset, so
+        // the next reset is still next month, not now.
+        let now = DateTime::parse_from_rfc3339("2026-07-01T00:00:00+00:00")
+            .unwrap()
+            .with_timezone(&Utc);
+        let reset = next_month_reset(now);
+        assert_eq!(
+            reset,
+            DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
     }
 }

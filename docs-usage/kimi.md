@@ -196,7 +196,12 @@ Key differences from the inferred shape:
   surfaces this as `total_quota` and collapses it to a **binary signal**
   (`used=0` → available, `used≥1` → exhausted, raw `limit` ignored) so
   the bar renders fully red the moment the monthly cap is touched,
-  regardless of how far into the cycle you are.
+  regardless of how far into the cycle you are. The server doesn't
+  return a reset timestamp for `totalQuota`, so the parser synthesizes
+  one at the **next calendar-month boundary** (1st of next month, 00:00 UTC)
+  to drive the "resets in Xd Yh" hint under the bar. `period_seconds`
+  stays `None` so the binary bar doesn't draw an overspend/slack
+  overlay against elapsed calendar time.
 - **`parallel.limit` ("20")** represents a concurrent-request cap. It is
   not a time-windowed quota and is **not** surfaced as a quota bar (the
   value is the static ceiling, not tracked usage).
