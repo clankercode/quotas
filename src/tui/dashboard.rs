@@ -1185,7 +1185,8 @@ impl Dashboard {
                     let used_pct = (w.used as f64 / w.limit.max(1) as f64).clamp(0.0, 1.0);
                     let time_elapsed = bar::time_elapsed_fraction(w);
                     let color = bar::bar_color(used_pct);
-                    let overlay = bar_overlay_text(used_pct, w.used, w.limit, bar_width as usize);
+                    let overlay =
+                        bar_overlay_text(used_pct, w.used, w.limit, bar_width as usize, &w.window_type);
                     let bar_spans =
                         bar::build_labeled(used_pct, time_elapsed, bar_width, color, &overlay);
 
@@ -1484,12 +1485,30 @@ fn pace_badge(visible: &[&QuotaWindow]) -> Option<(String, Style)> {
     }
 }
 
-fn bar_overlay_text(used_pct: f64, used: i64, limit: i64, bar_width: usize) -> String {
+fn bar_overlay_text(
+    used_pct: f64,
+    used: i64,
+    limit: i64,
+    bar_width: usize,
+    window_type: &str,
+) -> String {
     let pct = format!("{:.0}%", used_pct * 100.0);
-    if bar_width < 10 {
+    // Binary-signal windows (Kimi `total_quota` collapses to limit=1) have no
+    // meaningful numerator/denominator — show the percentage only.
+    if window_type == "total_quota" || bar_width < 10 {
         return pct;
     }
-    let nums = format!("{}/{}", format_num(used), format_num(limit));
+    // Currency allowances (Grok monthly $) render whole-dollar counts to
+    // respect the overlay's tight width budget, e.g. `$29/$150`.
+    let nums = if let Some((sym, scale)) = bar::currency_bar_scale(window_type) {
+        format!(
+            "{sym}{}/{sym}{}",
+            (used as f64 / scale).round() as i64,
+            (limit as f64 / scale).round() as i64,
+        )
+    } else {
+        format!("{}/{}", format_num(used), format_num(limit))
+    };
     let compact = format!("{} {}", pct, nums);
     if compact.chars().count() + 2 <= bar_width {
         format!("{} ({})", pct, nums)
@@ -1826,5 +1845,33 @@ mod tests {
         dashboard.stable_order = dashboard.compute_visual_order();
 
         assert_eq!(dashboard.stable_order[0], 2);
+    }
+
+    #[test]
+    fn overlay_formats_grok_monthly_as_dollars() {
+        // Grok monthly $ allowance: used=$29.31 (×10000), limit=$150.
+        let overlay = bar_overlay_text(0.1954, 293_100, 1_500_000, 24, "monthly_allowance");
+        // Whole-dollar counts, no raw unit counts like "293.1k/1.5M".
+        assert!(overlay.contains("$29"), "overlay: {overlay}");
+        assert!(overlay.contains("$150"), "overlay: {overlay}");
+        assert!(!overlay.contains("293"), "overlay: {overlay}");
+        assert!(!overlay.contains('M'), "overlay: {overlay}");
+    }
+
+    #[test]
+    fn overlay_keeps_bare_monthly_as_plain_counts() {
+        // Regression: bare `monthly` (GitHub Copilot premium-request COUNTS,
+        // and Grok's credits-summary percentage) must NOT currency-format —
+        // only the distinct `monthly_allowance` window is dollars.
+        let overlay = bar_overlay_text(0.1667, 50, 300, 24, "monthly");
+        assert!(overlay.contains("50/300"), "overlay: {overlay}");
+        assert!(!overlay.contains('$'), "overlay: {overlay}");
+    }
+
+    #[test]
+    fn overlay_suppresses_numbers_for_total_quota() {
+        // Binary signal window (Kimi totalQuota, limit=1) shows % only.
+        assert_eq!(bar_overlay_text(1.0, 1, 1, 24, "total_quota"), "100%");
+        assert_eq!(bar_overlay_text(0.0, 0, 1, 24, "total_quota"), "0%");
     }
 }

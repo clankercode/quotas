@@ -20,6 +20,17 @@ pub fn currency_window(window_type: &str) -> Option<(&'static str, f64)> {
     None
 }
 
+/// Symbol + scale for windows whose used/limit numbers are a currency
+/// amount but which still render as a pacing bar (unlike the balance-only
+/// currency windows handled by `currency_window`). Currently only the
+/// Grok monthly `$` allowance.
+pub fn currency_bar_scale(window_type: &str) -> Option<(&'static str, f64)> {
+    match window_type {
+        "monthly_allowance" => Some(("$", 10_000.0)),
+        _ => None,
+    }
+}
+
 /// Fraction of the window's period that has already *elapsed*. Returns
 /// None when `reset_at` or `period_seconds` is missing. Mirrors the
 /// semantics of `used_pct` so both share the same left-to-right axis.
@@ -224,6 +235,7 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "weekly_haiku" => "7d Haiku".to_string(),
         "monthly_mcp" => "MCP".to_string(),
         "monthly" => "month".to_string(),
+        "monthly_allowance" => "month".to_string(),
         "total_quota" => "total".to_string(),
         "extra_credits" => "Creds".to_string(),
         "payg_balance" => "PAYG".to_string(),

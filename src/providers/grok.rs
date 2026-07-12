@@ -10,6 +10,7 @@ const CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com";
 const MGMT_BASE: &str = "https://management-api.x.ai";
 const CONSOLE_URL: &str = "https://console.x.ai/team/default/billing";
 const GROK_USAGE_URL: &str = "https://grok.com?_s=usage";
+const GROK_CLIENT_VERSION: &str = "0.2.93";
 
 pub struct GrokProvider {
     http: Client,
@@ -27,9 +28,16 @@ impl GrokProvider {
     /// Primary path: Grok Build session token → cli-chat-proxy billing.
     /// Fallback: management key → Management API prepaid balance.
     async fn fetch_quota(&self, key: &str) -> Result<ProviderResult> {
-        match self.fetch_cli_billing(key).await {
+        let cli_auth_err = match self.fetch_cli_billing(key).await {
             Ok(r) => return Ok(r),
-            Err(crate::Error::Auth(_)) | Err(crate::Error::Provider(_)) => {}
+            // Expired/invalid session token. Try the management path, but
+            // remember this error: for a session-only credential the session
+            // failure is the relevant message, not the downstream
+            // management-key validation error.
+            Err(e @ crate::Error::Auth(_)) => Some(e),
+            // 404 / not session-capable → this is a management key; fall
+            // through to the management path with no error to preserve.
+            Err(crate::Error::Provider(_)) => None,
             Err(e) => {
                 // Network / parse on primary path: still try management API
                 // before failing hard.
@@ -38,8 +46,14 @@ impl GrokProvider {
                 }
                 return Err(e);
             }
+        };
+        // Fallback: management key → Management API prepaid balance. If the
+        // primary cli path failed with an auth error, surface *that* rather
+        // than the management-key validation error it would otherwise mask.
+        match self.fetch_mgmt_billing(key).await {
+            Ok(r) => Ok(r),
+            Err(mgmt_err) => Err(cli_auth_err.unwrap_or(mgmt_err)),
         }
-        self.fetch_mgmt_billing(key).await
     }
 
     async fn fetch_cli_billing(&self, key: &str) -> Result<ProviderResult> {
@@ -52,14 +66,14 @@ impl GrokProvider {
                 .get(format!("{}/v1/billing", CLI_CHAT_BASE))
                 .header("Authorization", &auth_hdr)
                 .header("Accept", "application/json")
-                .header("x-grok-client-version", "0.2.93")
+                .header("x-grok-client-version", GROK_CLIENT_VERSION)
                 .header("x-grok-client-surface", "grok-build")
                 .send(),
             self.http
                 .get(format!("{}/v1/billing?format=credits", CLI_CHAT_BASE))
                 .header("Authorization", &auth_hdr)
                 .header("Accept", "application/json")
-                .header("x-grok-client-version", "0.2.93")
+                .header("x-grok-client-version", GROK_CLIENT_VERSION)
                 .header("x-grok-client-surface", "grok-build")
                 .send(),
         );
@@ -260,14 +274,13 @@ fn cents_value_to_units(v: &serde_json::Value) -> Option<i64> {
         if let Some(val) = obj.get("val").and_then(|x| x.as_str()) {
             return Some(cents_str_to_units(val));
         }
+        // `val` as a JSON number. `as_f64` matches every JSON number
+        // (integer or float), so this also covers integer-typed amounts.
+        // Prepaid ledger balances may be negative; take abs for
+        // remaining-credit semantics (used/limit on cli billing are always
+        // non-negative, so abs is a no-op there).
         if let Some(n) = obj.get("val").and_then(|x| x.as_f64()) {
             return Some((n.abs() * 100.0).round() as i64);
-        }
-        // Signed used amounts should not take abs for "used" counters — callers
-        // that need remaining abs should still get positive magnitudes here for
-        // money balances. Used/limit on cli billing are always non-negative.
-        if let Some(n) = obj.get("val").and_then(|x| x.as_i64()) {
-            return Some(n.unsigned_abs() as i64 * 100);
         }
     }
     if let Some(s) = v.as_str() {
@@ -479,8 +492,11 @@ pub(crate) fn parse_cli_billing(
         .unwrap_or(0);
 
     if limit_units > 0 || used_units > 0 {
+        // Distinct from the bare `monthly` window type (used by the credits
+        // summary here and by other providers e.g. GitHub Copilot) so the TUI
+        // can currency-format only this USD allowance without colliding.
         windows.push(QuotaWindow {
-            window_type: "monthly".into(),
+            window_type: "monthly_allowance".into(),
             used: used_units,
             limit: limit_units.max(used_units),
             remaining: (limit_units - used_units).max(0),
@@ -719,8 +735,8 @@ mod tests {
         let monthly = quota
             .windows
             .iter()
-            .find(|w| w.window_type == "monthly")
-            .expect("monthly window");
+            .find(|w| w.window_type == "monthly_allowance")
+            .expect("monthly allowance window");
         // live fixture: monthlyLimit 15000 cents = $150
         assert_eq!(monthly.limit, 1_500_000);
         assert!(monthly.used > 0);
@@ -741,7 +757,7 @@ mod tests {
         let quota = parse_cli_billing(&body, None).unwrap();
         assert_eq!(quota.windows.len(), 1);
         let w = &quota.windows[0];
-        assert_eq!(w.window_type, "monthly");
+        assert_eq!(w.window_type, "monthly_allowance");
         assert_eq!(w.limit, 1_500_000);
         assert_eq!(w.used, 271_200);
         assert_eq!(w.remaining, 1_228_800);
@@ -781,7 +797,7 @@ mod tests {
         assert_eq!(quota.windows[0].used, 74);
         assert_eq!(quota.windows[0].limit, 100);
         assert_eq!(quota.windows[0].remaining, 26);
-        assert_eq!(quota.windows[1].window_type, "monthly");
+        assert_eq!(quota.windows[1].window_type, "monthly_allowance");
     }
 
     #[test]

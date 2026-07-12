@@ -190,9 +190,7 @@ Key differences from the inferred shape:
   [Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
   [Error Reference](https://www.kimi.com/code/docs/en/kimi-code/error-reference.html)):
   "if your Kimi membership's monthly total is reached, Kimi Code quota is
-  frozen until the monthly quota resets or you upgrade." The 7d/5h windows
-  stay at 100/100 even when the server returns 403 `access_terminated_error`
-  on coding requests — confirmed empirically on 2026-07-11. The parser
+  frozen until the monthly quota resets or you upgrade." The parser
   surfaces this as `total_quota` and collapses it to a **binary signal**
   (`used=0` → available, `used≥1` → exhausted, raw `limit` ignored) so
   the bar renders fully red the moment the monthly cap is touched,
@@ -202,6 +200,19 @@ Key differences from the inferred shape:
   to drive the "resets in Xd Yh" hint under the bar. `period_seconds`
   stays `None` so the binary bar doesn't draw an overspend/slack
   overlay against elapsed calendar time.
+  - **Empirically confirmed (2026-07-12):** a live `/usages` capture from a
+    genuinely frozen account showed `totalQuota {limit:100, used:1,
+    remaining:99}` while the 7d/5h windows both read 100/100. This proves
+    (a) any `used>0` signals the monthly cap is hit, and (b) `remaining`
+    (99 while frozen) is misleading and is **deliberately ignored** — it
+    does not reflect the freeze. Earlier (2026-07-11) the 7d/5h windows
+    were also seen at 100/100 alongside a 403 `access_terminated_error` on
+    coding requests.
+  - **Caveat / standing TODO (re-verify ~2026-07-14, on the next monthly
+    reset):** the frozen sample is confirmed, but the *healthy mid-cycle*
+    case is not yet captured. Confirm that a within-cap account reports
+    `used=0` (not 1), so that "any usage>0 ⇒ frozen" is certain rather
+    than merely "any activity ⇒ frozen".
 - **`parallel.limit` ("20")** represents a concurrent-request cap. It is
   not a time-windowed quota and is **not** surfaced as a quota bar (the
   value is the static ceiling, not tracked usage).

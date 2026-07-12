@@ -253,6 +253,9 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRend
     let color = bar::bar_color(used_pct);
     let time_elapsed = bar::time_elapsed_fraction(w);
     let bar_spans = bar::build(used_pct, time_elapsed, options.bar_width, color);
+    // Currency allowances (Grok monthly $) keep the pacing bar but render
+    // their used/limit/remaining numbers as dollar amounts.
+    let currency = bar::currency_bar_scale(&w.window_type);
 
     if options.mode == ResolvedDetailMode::Compact {
         let compact_label_w = options.label_w.min(14);
@@ -272,7 +275,11 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRend
                 .bold()
                 .fg(color),
         );
-        compact.push(Span::raw(format!("{}L", fmt_exact(w.remaining))).dim());
+        let remaining_txt = match currency {
+            Some((sym, scale)) => format!("{}{:.2}L", sym, w.remaining as f64 / scale),
+            None => format!("{}L", fmt_exact(w.remaining)),
+        };
+        compact.push(Span::raw(remaining_txt).dim());
         lines.push(Line::from(compact));
 
         if let Some(reset) = w.reset_at {
@@ -305,15 +312,23 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRend
     lines.push(Line::from(l1));
 
     // Row 2: exact numbers
-    lines.push(Line::from(vec![
-        Span::raw(options.subrow_indent.clone()),
-        Span::raw(format!(
+    let numbers = match currency {
+        Some((sym, scale)) => format!(
+            "{sym}{:.2} used · {sym}{:.2} left · {sym}{:.2} cap",
+            used as f64 / scale,
+            w.remaining as f64 / scale,
+            w.limit as f64 / scale,
+        ),
+        None => format!(
             "{} used · {} left · {} cap",
             fmt_exact(used),
             fmt_exact(w.remaining),
             fmt_exact(w.limit)
-        ))
-        .dim(),
+        ),
+    };
+    lines.push(Line::from(vec![
+        Span::raw(options.subrow_indent.clone()),
+        Span::raw(numbers).dim(),
     ]));
 
     // Row 3: reset info (if known)
@@ -692,6 +707,76 @@ mod tests {
             humanize_duration(chrono::Duration::seconds(86400 * 3 + 3600)),
             "3d 1h"
         );
+    }
+
+    #[test]
+    fn renders_grok_monthly_numbers_as_dollars() {
+        // Grok monthly $ allowance stores USD in ×10000 units. The pacing
+        // bar stays, but row-2 numbers must read as dollars, not raw counts.
+        let result = ProviderResult {
+            kind: ProviderKind::Grok,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Grok Build".into(),
+                    windows: vec![QuotaWindow {
+                        window_type: "monthly_allowance".into(),
+                        used: 293_100,     // $29.31
+                        limit: 1_500_000,  // $150.00
+                        remaining: 1_206_900, // $120.69
+                        reset_at: Some(
+                            chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+                                .unwrap()
+                                .with_timezone(&chrono::Utc),
+                        ),
+                        period_seconds: Some(31 * 24 * 3600),
+                    }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        };
+        let out = render_detail_text(result, 100, 18);
+        assert!(out.contains("$29.31 used"), "out:\n{out}");
+        assert!(out.contains("$120.69 left"), "out:\n{out}");
+        assert!(out.contains("$150.00 cap"), "out:\n{out}");
+        // Must NOT show raw ×10000 counts.
+        assert!(!out.contains("293,100"), "out:\n{out}");
+    }
+
+    #[test]
+    fn renders_bare_monthly_as_plain_counts_not_dollars() {
+        // Regression: a GitHub Copilot–style `monthly` window carries COUNTS
+        // (premium requests), not USD. It must render as plain counts, never
+        // dollars — only the distinct `monthly_allowance` window is currency.
+        let result = ProviderResult {
+            kind: ProviderKind::GitHubCopilot,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Copilot".into(),
+                    windows: vec![QuotaWindow {
+                        window_type: "monthly".into(),
+                        used: 50,
+                        limit: 300,
+                        remaining: 250,
+                        reset_at: None,
+                        period_seconds: None,
+                    }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: None,
+            cached_at: None,
+        };
+        let out = render_detail_text(result, 100, 18);
+        assert!(out.contains("50 used"), "out:\n{out}");
+        assert!(out.contains("250 left"), "out:\n{out}");
+        assert!(out.contains("300 cap"), "out:\n{out}");
+        assert!(!out.contains('$'), "out:\n{out}");
     }
 
     #[test]

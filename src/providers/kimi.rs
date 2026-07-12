@@ -246,12 +246,20 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
     // this is reached the entire Kimi Code quota is "frozen" regardless of
     // the 7d and 5h windows, which is why surfacing it matters.
     //
-    // The server returns `used` on a 0/100+ scale, but the only signal
-    // that actually matters is "any usage at all" — the raw `limit` is
-    // meaningless, and whether used=1 or used=50, the result is the same:
-    // the monthly cap is exhausted and Kimi Code is frozen. Collapse the
-    // window to a binary state so the bar renders fully red (exhausted)
-    // or fully green (available) instead of an unhelpful 1% / 50% bar.
+    // The "any usage>0 ⇒ frozen" reading is EMPIRICALLY CONFIRMED by a live
+    // capture from a genuinely frozen account (2026-07-12): `totalQuota`
+    // read {limit:100, used:1, remaining:99} while the 7d/5h windows both
+    // read 100/100. So (a) any usage>0 signals the monthly cap is hit, and
+    // (b) `remaining` is misleading (99 while frozen) and is deliberately
+    // ignored — it does not reflect the freeze. The raw `limit` is likewise
+    // meaningless. Collapse the window to a binary state so the bar renders
+    // fully red (exhausted) or fully green (available) instead of an
+    // unhelpful 1% / 50% bar.
+    //
+    // NOTE/TODO (re-verify ~2026-07-14, when the monthly cap resets): the
+    // frozen sample is confirmed, but the healthy mid-cycle case is not yet
+    // captured. Re-check that a within-cap account reports `used=0` (not 1),
+    // to be certain used>0 truly means frozen rather than "any activity".
     //
     // The server returns no reset timestamp, so synthesize one at the
     // standard calendar-month boundary (1st of next month, 00:00 UTC).
@@ -260,18 +268,22 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
     // based on elapsed calendar time — the binary state isn't pacing data.
     if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
         let total_value = serde_json::Value::Object(total.clone());
-        let raw_limit = num_field(&total_value, "limit");
+        // Emit based on the presence of real usage data, not on `limit`
+        // (which is meaningless). `used` is authoritative; else derive from
+        // `remaining` (raw `limit` is used only for that fallback math). With
+        // neither present the payload carries no usage signal, so we must NOT
+        // assert "frozen" — skip the window entirely.
         let raw_used = if total.contains_key("used") {
-            num_field(&total_value, "used")
-        } else {
-            // No `used` field — derive from `remaining` against the raw
-            // limit. The limit value only matters for this fallback math;
-            // it is never surfaced in the emitted window.
+            Some(num_field(&total_value, "used"))
+        } else if total.contains_key("remaining") {
+            let raw_limit = num_field(&total_value, "limit");
             let remaining = num_field(&total_value, "remaining");
-            (raw_limit - remaining).max(0)
+            Some((raw_limit - remaining).max(0))
+        } else {
+            None
         };
-        let exhausted = raw_used > 0;
-        if raw_limit > 0 {
+        if let Some(raw_used) = raw_used {
+            let exhausted = raw_used > 0;
             windows.push(QuotaWindow {
                 window_type: "total_quota".to_string(),
                 used: i64::from(exhausted),
@@ -476,6 +488,40 @@ mod tests {
             total.reset_at,
             Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))
         );
+    }
+
+    #[test]
+    fn total_quota_without_used_or_remaining_emits_no_window() {
+        // A totalQuota object carrying no usage data (only `limit`, or
+        // nothing) must NOT emit a window — asserting "frozen" here would
+        // spuriously paint the card red on a payload with no usage signal.
+        let body = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100"},
+            "limits": [],
+            "totalQuota": {"limit": "100"}
+        });
+        let quota = parse_coding_response(&body, now());
+        assert!(
+            !quota.windows.iter().any(|w| w.window_type == "total_quota"),
+            "no usage data => no total_quota window"
+        );
+    }
+
+    #[test]
+    fn total_quota_without_limit_still_emits_from_used() {
+        // `limit` is meaningless; presence of `used` alone must still emit.
+        let body = serde_json::json!({
+            "usage": {"limit": "100", "remaining": "100"},
+            "limits": [],
+            "totalQuota": {"used": "1", "remaining": "99"}
+        });
+        let total = parse_coding_response(&body, now())
+            .windows
+            .into_iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window from `used` without `limit`");
+        assert_eq!(total.limit, 1);
+        assert_eq!(total.used, 1);
     }
 
     #[test]
