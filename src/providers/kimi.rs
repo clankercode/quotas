@@ -130,10 +130,15 @@ fn parse_reset(v: &serde_json::Value) -> Option<DateTime<Utc>> {
 }
 
 /// Next calendar-month boundary at 00:00 UTC (1st of next month). Used
-/// as the default reset anchor for the monthly `totalQuota` window
+/// as a best-effort reset anchor for the monthly `totalQuota` window
 /// since the `/usages` endpoint doesn't return a server-side reset
-/// timestamp for it. Standard subscription convention is a calendar
-/// month; the user's actual billing day is not exposed in the response.
+/// timestamp for it.
+///
+/// Caveat: a live before/after pair on 2026-07-11 (frozen) → 2026-07-13/14
+/// (healthy post-reset) shows the monthly cap reset mid-month, so
+/// anniversary billing is more likely than a calendar-month boundary.
+/// Without a server timestamp the hint can be off by weeks; it is only
+/// a rough "somewhere this month-ish" cue.
 fn next_month_reset(now: DateTime<Utc>) -> DateTime<Utc> {
     let (year, month) = if now.month() == 12 {
         (now.year() + 1, 1)
@@ -246,44 +251,36 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
     // this is reached the entire Kimi Code quota is "frozen" regardless of
     // the 7d and 5h windows, which is why surfacing it matters.
     //
-    // The "any usage>0 ⇒ frozen" reading is EMPIRICALLY CONFIRMED by a live
-    // capture from a genuinely frozen account (2026-07-12): `totalQuota`
-    // read {limit:100, used:1, remaining:99} while the 7d/5h windows both
-    // read 100/100. So (a) any usage>0 signals the monthly cap is hit, and
-    // (b) `remaining` is misleading (99 while frozen) and is deliberately
-    // ignored — it does not reflect the freeze. The raw `limit` is likewise
-    // meaningless. Collapse the window to a binary state so the bar renders
-    // fully red (exhausted) or fully green (available) instead of an
-    // unhelpful 1% / 50% bar.
+    // Empirically confirmed by a before/after pair on the same account:
     //
-    // NOTE/TODO (re-verify ~2026-07-14, when the monthly cap resets): the
-    // frozen sample is confirmed, but the healthy mid-cycle case is not yet
-    // captured. Re-check that a within-cap account reports `used=0` (not 1),
-    // to be certain used>0 truly means frozen rather than "any activity".
+    //   frozen  (2026-07-11, 403 access_terminated): totalQuota {limit:100, used:1, remaining:99}
+    //   healthy (2026-07-13/14, post monthly reset):  totalQuota {limit:100, remaining:99}
+    //                                                 ^^^ no `used` field
     //
-    // The server returns no reset timestamp, so synthesize one at the
-    // standard calendar-month boundary (1st of next month, 00:00 UTC).
-    // This drives the "resets in Xd Yh" hint under the bar. `period_seconds`
-    // stays None so the binary bar doesn't get an overspend/slack overlay
-    // based on elapsed calendar time — the binary state isn't pacing data.
+    // So (a) freeze is signalled by `used` present and >0, (b) `remaining`
+    // is sticky at 99 across both states and must be ignored entirely —
+    // never derive exhaustion from `limit - remaining`, and (c) raw `limit`
+    // is likewise meaningless. Collapse to a binary bar (fully red /
+    // fully green). Healthy payloads often omit `used` rather than
+    // sending `used:0`; that still means available.
+    //
+    // The server returns no reset timestamp. We synthesize the next
+    // calendar-month boundary (1st of next month, 00:00 UTC) as a
+    // best-effort "resets in Xd Yh" hint. Caveat: this account's monthly
+    // reset landed mid-month (~2026-07-14), so anniversary billing is
+    // more likely than calendar month — the hint can be off by weeks.
+    // `period_seconds` stays None so the binary bar doesn't get an
+    // overspend/slack overlay based on elapsed calendar time.
     if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
         let total_value = serde_json::Value::Object(total.clone());
-        // Emit based on the presence of real usage data, not on `limit`
-        // (which is meaningless). `used` is authoritative; else derive from
-        // `remaining` (raw `limit` is used only for that fallback math). With
-        // neither present the payload carries no usage signal, so we must NOT
-        // assert "frozen" — skip the window entirely.
-        let raw_used = if total.contains_key("used") {
-            Some(num_field(&total_value, "used"))
-        } else if total.contains_key("remaining") {
-            let raw_limit = num_field(&total_value, "limit");
-            let remaining = num_field(&total_value, "remaining");
-            Some((raw_limit - remaining).max(0))
-        } else {
-            None
-        };
-        if let Some(raw_used) = raw_used {
-            let exhausted = raw_used > 0;
+        // Emit when we have any totalQuota usage signal. `used` is the
+        // only freeze indicator; `remaining` alone still emits a green
+        // (available) bar so the card surfaces the monthly window, but
+        // never implies exhaustion. With neither field, skip entirely.
+        let has_used = total.contains_key("used");
+        let has_remaining = total.contains_key("remaining");
+        if has_used || has_remaining {
+            let exhausted = has_used && num_field(&total_value, "used") > 0;
             windows.push(QuotaWindow {
                 window_type: "total_quota".to_string(),
                 used: i64::from(exhausted),
@@ -350,10 +347,14 @@ mod tests {
 
     #[test]
     fn parses_live_coding_usages_fixture() {
-        // Captured live from https://api.kimi.com/coding/v1/usages on 2026-07-11.
-        // Response uses string-typed numbers ("100") and `resetTime` (not
-        // `reset_at`), plus the TIME_UNIT_-prefixed time unit. The parser
+        // Captured live from https://api.kimi.com/coding/v1/usages on 2026-07-11
+        // while the account was FROZEN (403 access_terminated_error on coding
+        // requests). Response uses string-typed numbers ("100") and `resetTime`
+        // (not `reset_at`), plus the TIME_UNIT_-prefixed time unit. The parser
         // accepts both via num_field() / trim_start_matches("TIME_UNIT_").
+        //
+        // totalQuota: {limit:100, used:1, remaining:99} — `used:1` is the
+        // freeze flag; remaining is sticky/misleading (see post_reset fixture).
         let body = fixture("coding_usages_default.json");
         let quota = parse_coding_response(&body, now());
 
@@ -381,22 +382,19 @@ mod tests {
 
         // totalQuota is the monthly Kimi-membership cap (per
         // https://www.kimi.com/code/docs/en/kimi-code/membership.html).
-        // Server returns it without a reset timestamp and the
-        // 7d/5h windows both report 100/100 even when the billing
-        // cycle is exhausted — which is why surfacing it matters.
-        // The raw value is "any usage at all" — `used=1` of the
-        // meaningless 100-limit collapses to a binary exhausted
-        // signal so the bar renders fully red instead of 1% green.
+        // 7d/5h both report 100/100 even when frozen — which is why
+        // surfacing totalQuota matters. `used=1` collapses to binary
+        // exhausted so the bar renders fully red instead of 1% green.
         // The reset timestamp is synthesized to the next calendar
         // month boundary (1st of next month, 00:00 UTC) so the bar
-        // shows a "resets in Xd Yh" hint.
+        // shows a "resets in Xd Yh" hint (approximate — see next_month_reset).
         let total = quota
             .windows
             .iter()
             .find(|w| w.window_type == "total_quota")
             .expect("total_quota window");
         assert_eq!(total.limit, 1, "raw 100-limit collapsed to binary 1");
-        assert_eq!(total.used, 1, "non-zero used => exhausted");
+        assert_eq!(total.used, 1, "used present and >0 => exhausted");
         assert_eq!(total.remaining, 0);
         // NOW is 2026-07-12 → next month is August 2026.
         assert_eq!(
@@ -408,6 +406,60 @@ mod tests {
             total.period_seconds.is_none(),
             "binary window: no period_seconds so the bar doesn't draw overspend/slack against elapsed calendar time"
         );
+    }
+
+    #[test]
+    fn parses_live_coding_usages_post_reset_fixture() {
+        // Captured live on 2026-07-13/14 right after the monthly membership
+        // quota reset (same account as coding_usages_default.json). Healthy:
+        // totalQuota is {limit:100, remaining:99} with `used` OMITTED entirely.
+        // remaining is still 99 — identical to the frozen capture — so it is
+        // not a usage counter. Only the presence/absence of `used` distinguishes
+        // frozen from available. Weekly resetTime advanced by 7 days.
+        let body = fixture("coding_usages_post_reset.json");
+        let quota = parse_coding_response(&body, now());
+
+        assert_eq!(quota.plan_name, "Kimi Coding Plan");
+
+        let weekly = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "weekly")
+            .expect("weekly window");
+        assert_eq!(weekly.limit, 100);
+        assert_eq!(weekly.remaining, 100);
+        assert_eq!(
+            weekly.reset_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-07-20T09:59:07.479363Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+
+        let five_h = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h")
+            .expect("5h window");
+        assert_eq!(five_h.remaining, 100);
+
+        let total = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window");
+        assert_eq!(total.limit, 1, "collapsed to binary");
+        assert_eq!(
+            total.used, 0,
+            "remaining-only payload (no used field) must be available, not derived as limit-remaining=1"
+        );
+        assert_eq!(total.remaining, 1);
+        assert_eq!(
+            total.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))
+        );
+        assert!(total.period_seconds.is_none());
     }
 
     #[test]
@@ -467,10 +519,10 @@ mod tests {
 
     #[test]
     fn parses_total_quota_from_remaining_only_when_used_missing() {
-        // Some /usages responses may omit `used` and only supply
-        // `remaining`. Fallback math still derives exhaustion: any
-        // tokens consumed (remaining < limit) is a non-zero used
-        // signal, so the binary result is exhausted.
+        // Live post-reset payloads omit `used` and only supply
+        // `remaining` (stuck at 99). That shape is HEALTHY — do NOT
+        // derive exhaustion from limit - remaining. Only an explicit
+        // used>0 freezes the binary bar.
         let body = serde_json::json!({
             "usage": {"limit": "100", "remaining": "100"},
             "limits": [],
@@ -482,8 +534,8 @@ mod tests {
             .find(|w| w.window_type == "total_quota")
             .expect("total_quota window");
         assert_eq!(total.limit, 1);
-        assert_eq!(total.used, 1, "remaining<limit => exhausted");
-        assert_eq!(total.remaining, 0);
+        assert_eq!(total.used, 0, "remaining-only => available (not limit-remaining)");
+        assert_eq!(total.remaining, 1);
         assert_eq!(
             total.reset_at,
             Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))

@@ -1,6 +1,6 @@
 # Kimi / Moonshot -- account usage endpoints
 
-Research date: 2026-04-12 (updated 2026-07-11 with live fixture)
+Research date: 2026-04-12 (updated 2026-07-11 with live fixture; 2026-07-13/14 post-reset pair)
 
 
 ## Surface 1: Kimi PAYG (api.moonshot.ai)
@@ -145,9 +145,14 @@ The kimi-cli parser (`_parse_usage_payload` in `usage.py`) expects:
 }
 ```
 
-**Live fixture (captured 2026-07-11)** -- saved as
-`tests/fixtures/kimi/coding_usages_default.json`. Confirms the parser's
-inferred shape, but adds new fields the parser does **not** consume:
+**Live fixtures (same account, before/after monthly reset)**
+
+| File | Captured | Account state | `totalQuota` |
+|------|----------|---------------|--------------|
+| `tests/fixtures/kimi/coding_usages_default.json` | 2026-07-11 | **Frozen** (403 `access_terminated_error`) | `{limit:100, used:1, remaining:99}` |
+| `tests/fixtures/kimi/coding_usages_post_reset.json` | 2026-07-13/14 | **Healthy** (monthly cap just reset) | `{limit:100, remaining:99}` — **no `used` field** |
+
+Frozen shape (default fixture):
 
 ```json
 {
@@ -172,6 +177,12 @@ inferred shape, but adds new fields the parser does **not** consume:
 }
 ```
 
+Post-reset (healthy) differs only in:
+
+- **`totalQuota.used` is omitted** (not `"0"`).
+- **`totalQuota.remaining` stays `"99"`** — same as the frozen capture.
+- Weekly `usage.resetTime` advanced by 7 days (`2026-07-20T…`).
+
 Key differences from the inferred shape:
 
 - **`usage.used` is absent** in the live response; `remaining` is authoritative
@@ -183,36 +194,28 @@ Key differences from the inferred shape:
   parser strips it via `trim_start_matches("TIME_UNIT_")`.
 - **All numbers come back as strings** (`"100"` not `100`). The parser
   accepts both via `num_field`.
-- **`totalQuota` carries the monthly Kimi-membership usage** (`used` is
-  reported on a 0/100+ scale, `limit` is meaningless) which is the
-  **upstream cap on Kimi Code**. Per the Kimi docs
+- **`totalQuota` is the monthly Kimi-membership freeze flag**, not a
+  meaningful 0–100 usage gauge. Per the Kimi docs
   ([Overview](https://www.kimi.com/code/docs/en/),
   [Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
   [Error Reference](https://www.kimi.com/code/docs/en/kimi-code/error-reference.html)):
   "if your Kimi membership's monthly total is reached, Kimi Code quota is
   frozen until the monthly quota resets or you upgrade." The parser
-  surfaces this as `total_quota` and collapses it to a **binary signal**
-  (`used=0` → available, `used≥1` → exhausted, raw `limit` ignored) so
-  the bar renders fully red the moment the monthly cap is touched,
-  regardless of how far into the cycle you are. The server doesn't
-  return a reset timestamp for `totalQuota`, so the parser synthesizes
-  one at the **next calendar-month boundary** (1st of next month, 00:00 UTC)
-  to drive the "resets in Xd Yh" hint under the bar. `period_seconds`
-  stays `None` so the binary bar doesn't draw an overspend/slack
-  overlay against elapsed calendar time.
-  - **Empirically confirmed (2026-07-12):** a live `/usages` capture from a
-    genuinely frozen account showed `totalQuota {limit:100, used:1,
-    remaining:99}` while the 7d/5h windows both read 100/100. This proves
-    (a) any `used>0` signals the monthly cap is hit, and (b) `remaining`
-    (99 while frozen) is misleading and is **deliberately ignored** — it
-    does not reflect the freeze. Earlier (2026-07-11) the 7d/5h windows
-    were also seen at 100/100 alongside a 403 `access_terminated_error` on
-    coding requests.
-  - **Caveat / standing TODO (re-verify ~2026-07-14, on the next monthly
-    reset):** the frozen sample is confirmed, but the *healthy mid-cycle*
-    case is not yet captured. Confirm that a within-cap account reports
-    `used=0` (not 1), so that "any usage>0 ⇒ frozen" is certain rather
-    than merely "any activity ⇒ frozen".
+  surfaces this as `total_quota` and collapses it to a **binary signal**:
+  - `used` present and `>0` → **exhausted** (frozen)
+  - `used` absent, or `used=0` → **available**
+  - `remaining` is **sticky at 99 across frozen and healthy** and is
+    **never** used to derive exhaustion (`limit - remaining` would false-red
+    a healthy post-reset account)
+  - raw `limit` is ignored
+  The server doesn't return a reset timestamp for `totalQuota`, so the
+  parser synthesizes one at the **next calendar-month boundary** (1st of
+  next month, 00:00 UTC) as a best-effort "resets in Xd Yh" hint.
+  **Caveat:** the live freeze→healthy transition landed mid-month
+  (~2026-07-14), so anniversary billing is more likely than a calendar
+  month — the hint can be off by weeks. `period_seconds` stays `None`
+  so the binary bar doesn't draw an overspend/slack overlay against
+  elapsed calendar time.
 - **`parallel.limit` ("20")** represents a concurrent-request cap. It is
   not a time-windowed quota and is **not** surfaced as a quota bar (the
   value is the static ceiling, not tracked usage).
@@ -319,9 +322,10 @@ plugin can import those helpers directly.
 
 ## Open questions / unknowns
 
-1. **Exact response shape of `/usages`**: The parser handles many field name
-   variants (camelCase and snake_case). Without a captured real response, we
-   cannot be 100% sure which variant the server currently returns.
+1. **Exact response shape of `/usages`**: Live fixtures under
+   `tests/fixtures/kimi/` pin the current oversea Coding Plan shape
+   (string numbers, `resetTime`, `TIME_UNIT_*`). Field-name variants
+   remain handled defensively for older/other regions.
 
 2. **Rate-limit response headers**: Neither surface has documented headers.
    Need empirical testing (`curl -v`) to check.

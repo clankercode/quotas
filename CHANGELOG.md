@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Kimi `totalQuota` semantics corrected from a live post-reset capture.** New fixture `tests/fixtures/kimi/coding_usages_post_reset.json` (kept alongside the frozen `coding_usages_default.json`) shows the healthy monthly-reset shape: `{limit:100, remaining:99}` with **`used` omitted**. `remaining` stays 99 in both frozen and healthy states, so deriving exhaustion from `limit - remaining` false-reds a healthy account. Freeze is now signalled only by `used` present and `>0`; remaining-only payloads render available (green). Calendar-month reset synthesis is kept as a best-effort hint but documented as approximate — this account's freeze→healthy transition landed mid-month (~2026-07-14), consistent with anniversary billing rather than the 1st. Tests: `parses_live_coding_usages_post_reset_fixture`; `parses_total_quota_from_remaining_only_when_used_missing` now expects available.
+
 ## 0.9.0 - 2026-07-12
 
 - Added **Cursor** support sourced from your local Cursor credentials — no separate CLI login needed. The resolver reads the WorkOS access token from either the cursor-agent CLI (`~/.config/cursor/auth.json`) or the Cursor IDE's SQLite globalStorage (`~/.config/Cursor/User/globalStorage/state.vscdb`), and derives the user id from the token's JWT `sub`. Surfaces plan spend, bonus, and API/Auto usage windows, each stamped with the billing-cycle reset so the card shows a "resets in Xd Yh" hint and pace overlay. Live fixtures under `tests/fixtures/cursor/`.
