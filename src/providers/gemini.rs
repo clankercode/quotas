@@ -326,9 +326,19 @@ impl crate::providers::Provider for GeminiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/gemini")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
 
     #[test]
     fn parses_quota_response() {
@@ -507,5 +517,35 @@ mod tests {
         assert_eq!(quota.windows[0].limit, 100);
         assert_eq!(quota.windows[0].remaining, 96);
         assert_eq!(quota.windows[0].used, 4);
+    }
+
+    #[test]
+    fn parses_live_retrieve_user_quota_fixture() {
+        // Captured 2026-07-13 via Antigravity (agy) OAuth against
+        // cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota.
+        // Live shape is fraction-only (no remainingAmount), one REQUESTS
+        // bucket per model, remainingFraction as integer 0/1.
+        let body = fixture("retrieve_user_quota_live.json");
+        let quota = parse_quota(&body).unwrap();
+
+        assert_eq!(quota.plan_name, "Gemini API");
+        assert_eq!(quota.windows.len(), 8, "one window per model bucket");
+
+        for w in &quota.windows {
+            assert!(
+                w.window_type.starts_with("REQUESTS_gemini-"),
+                "unexpected window_type {}",
+                w.window_type
+            );
+            assert_eq!(w.limit, 100, "{} limit", w.window_type);
+            assert_eq!(w.remaining, 100, "{} remaining (full)", w.window_type);
+            assert_eq!(w.used, 0, "{} used", w.window_type);
+            assert!(w.reset_at.is_some(), "{} reset_at", w.window_type);
+            assert!(w.period_seconds.is_none());
+        }
+
+        let ids: Vec<&str> = quota.windows.iter().map(|w| w.window_type.as_str()).collect();
+        assert!(ids.contains(&"REQUESTS_gemini-2.5-flash"));
+        assert!(ids.contains(&"REQUESTS_gemini-3.1-pro-preview"));
     }
 }

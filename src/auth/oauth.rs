@@ -39,14 +39,60 @@ fn parse_claude_credentials(content: &str) -> Option<String> {
     parsed.claude_ai_oauth.and_then(|o| o.access_token)
 }
 
-fn parse_gemini_credentials(content: &str) -> Option<String> {
-    #[derive(Deserialize)]
-    struct GeminiCreds {
-        #[serde(rename = "access_token")]
-        access_token: Option<String>,
+/// Parse Gemini / Antigravity (agy) OAuth credential files.
+///
+/// Supported shapes:
+/// - Gemini CLI `~/.gemini/oauth_creds.json`:
+///   `{ "access_token": "ya29…", "expiry_date": <ms epoch> }`
+/// - Antigravity CLI `~/.gemini/antigravity-cli/antigravity-oauth-token`:
+///   `{ "token": { "access_token": "ya29…", "expiry": "<rfc3339>" } }`
+///
+/// Returns `None` when the token is missing **or known-expired**, so the
+/// multi-path OAuth resolver can fall through to the next credential file
+/// (e.g. expired gemini-cli → fresh agy token).
+pub(crate) fn parse_gemini_credentials(content: &str) -> Option<String> {
+    let root: serde_json::Value = serde_json::from_str(content).ok()?;
+
+    let access_token = root
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            root.get("token")
+                .and_then(|t| t.get("access_token"))
+                .and_then(|v| v.as_str())
+        })
+        .filter(|s| !s.is_empty())?
+        .to_string();
+
+    if gemini_token_is_expired(&root) {
+        return None;
     }
-    let parsed: GeminiCreds = serde_json::from_str(content).ok()?;
-    parsed.access_token
+
+    Some(access_token)
+}
+
+fn gemini_token_is_expired(root: &serde_json::Value) -> bool {
+    use chrono::{TimeZone, Utc};
+
+    // Gemini CLI stores expiry as milliseconds since epoch.
+    if let Some(ms) = root.get("expiry_date").and_then(|v| v.as_i64()) {
+        if let Some(exp) = Utc.timestamp_millis_opt(ms).single() {
+            return exp <= Utc::now();
+        }
+    }
+
+    // Antigravity stores RFC3339 under token.expiry.
+    if let Some(s) = root
+        .get("token")
+        .and_then(|t| t.get("expiry"))
+        .and_then(|v| v.as_str())
+    {
+        if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(s) {
+            return exp.with_timezone(&Utc) <= Utc::now();
+        }
+    }
+
+    false
 }
 
 /// Parse Grok Build's `~/.grok/auth.json`.
@@ -150,11 +196,19 @@ impl OAuthFileResolver {
     pub fn gemini() -> Self {
         let mut paths: Vec<PathBuf> = Vec::new();
         if let Some(home) = dirs::home_dir() {
+            // Gemini CLI oauth first; if expired, parse returns None and we
+            // fall through to the Antigravity (agy) token which shares the
+            // same Code Assist quota endpoint.
             paths.push(home.join(".gemini/oauth_creds.json"));
+            paths.push(
+                home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
+            );
         }
         if let Ok(gemini_home) = std::env::var("GEMINI_CLI_HOME") {
             if !gemini_home.is_empty() {
-                paths.insert(0, PathBuf::from(gemini_home).join("oauth_creds.json"));
+                let base = PathBuf::from(gemini_home);
+                paths.insert(0, base.join("oauth_creds.json"));
+                paths.insert(1, base.join("antigravity-cli/antigravity-oauth-token"));
             }
         }
         Self {
@@ -243,7 +297,8 @@ mod tests {
 
     #[test]
     fn parses_gemini_credentials() {
-        let json = r#"{"access_token":"ya29.test-token","token_type":"Bearer","refresh_token":"1//0g-xxx","expiry_date":1776279276916}"#;
+        // Far-future expiry so the token is accepted.
+        let json = r#"{"access_token":"ya29.test-token","token_type":"Bearer","refresh_token":"1//0g-xxx","expiry_date":4102444800000}"#;
         assert_eq!(
             parse_gemini_credentials(json).as_deref(),
             Some("ya29.test-token")
@@ -259,6 +314,41 @@ mod tests {
     #[test]
     fn parses_gemini_credentials_empty() {
         assert_eq!(parse_gemini_credentials("").as_deref(), None);
+    }
+
+    #[test]
+    fn parses_gemini_credentials_rejects_expired() {
+        // expiry_date in the past (ms epoch).
+        let json = r#"{"access_token":"ya29.stale","expiry_date":1000}"#;
+        assert_eq!(parse_gemini_credentials(json).as_deref(), None);
+    }
+
+    #[test]
+    fn parses_antigravity_nested_token() {
+        let json = r#"{
+            "token": {
+                "access_token": "ya29.agy-token",
+                "token_type": "Bearer",
+                "refresh_token": "1//0g-xxx",
+                "expiry": "2099-01-01T00:00:00+00:00"
+            },
+            "auth_method": "LOGIN_WITH_GOOGLE"
+        }"#;
+        assert_eq!(
+            parse_gemini_credentials(json).as_deref(),
+            Some("ya29.agy-token")
+        );
+    }
+
+    #[test]
+    fn parses_antigravity_rejects_expired() {
+        let json = r#"{
+            "token": {
+                "access_token": "ya29.agy-stale",
+                "expiry": "2020-01-01T00:00:00+00:00"
+            }
+        }"#;
+        assert_eq!(parse_gemini_credentials(json).as_deref(), None);
     }
 
     #[test]

@@ -1024,6 +1024,11 @@ fn handle_mouse_event(mouse: MouseEvent, ctx: TuiEventContext<'_>) -> TuiLoopAct
                     ctx.dashboard.auto_refresh_enabled = !ctx.dashboard.auto_refresh_enabled;
                 }
                 Some(HitResult::Quit) => return TuiLoopAction::Quit,
+                Some(HitResult::OpenUpdate) => {
+                    if let Some(url) = ctx.dashboard.update_release_url() {
+                        quotas::update::open_url(&url);
+                    }
+                }
                 Some(HitResult::Card(vpos)) => {
                     if ctx.dashboard.selected_index == vpos && !ctx.dashboard.show_detail {
                         // Second click on already-selected card opens detail.

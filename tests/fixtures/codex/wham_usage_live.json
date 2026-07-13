@@ -1,0 +1,59 @@
+{
+  "account_id": "REDACTED",
+  "additional_rate_limits": [
+    {
+      "limit_name": "GPT-5.3-Codex-Spark",
+      "metered_feature": "codex_bengalfox",
+      "rate_limit": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary_window": {
+          "limit_window_seconds": 604800,
+          "reset_after_seconds": 604800,
+          "reset_at": 1784536727,
+          "used_percent": 0
+        },
+        "secondary_window": null
+      }
+    }
+  ],
+  "code_review_rate_limit": null,
+  "credits": {
+    "approx_cloud_messages": [
+      0,
+      0
+    ],
+    "approx_local_messages": [
+      0,
+      0
+    ],
+    "balance": "0",
+    "has_credits": false,
+    "overage_limit_reached": false,
+    "unlimited": false
+  },
+  "email": "REDACTED",
+  "plan_type": "pro",
+  "promo": null,
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 555592,
+      "reset_at": 1784487518,
+      "used_percent": 76
+    },
+    "secondary_window": null
+  },
+  "rate_limit_reached_type": null,
+  "rate_limit_reset_credits": {
+    "available_count": 2
+  },
+  "referral_beacon": null,
+  "spend_control": {
+    "individual_limit": null,
+    "reached": false
+  },
+  "user_id": "REDACTED"
+}

@@ -72,6 +72,23 @@ impl CodexProvider {
     }
 }
 
+/// Format a Codex rate-limit window duration for display keys.
+///
+/// Prefer whole-day labels when the period is an exact multiple of a day
+/// (e.g. 604800s → `7d` rather than `168h`). Fall back to hours for the
+/// classic 5h primary window, then raw seconds.
+fn format_window_duration(seconds: i64) -> String {
+    if seconds >= 86400 && seconds % 86400 == 0 {
+        format!("{}d", seconds / 86400)
+    } else if seconds >= 3600 && seconds % 3600 == 0 {
+        format!("{}h", seconds / 3600)
+    } else if seconds > 0 {
+        format!("{}s", seconds)
+    } else {
+        "0h".to_string()
+    }
+}
+
 fn push_rate_limit_windows(
     windows: &mut Vec<QuotaWindow>,
     rate_limit: &serde_json::Value,
@@ -100,7 +117,7 @@ fn push_rate_limit_windows(
         .unwrap_or(18000);
 
     if primary_reset > 0 || primary_pct > 0 {
-        let base = format!("{}h", primary_window_sec / 3600);
+        let base = format_window_duration(primary_window_sec);
         let label = if label_prefix.is_empty() {
             base
         } else {
@@ -130,7 +147,7 @@ fn push_rate_limit_windows(
         .unwrap_or(604800);
 
     if secondary_reset > 0 || secondary_pct > 0 {
-        let base = format!("{}d", secondary_window_sec / 86400);
+        let base = format_window_duration(secondary_window_sec);
         let label = if label_prefix.is_empty() {
             base
         } else {
@@ -262,6 +279,24 @@ impl crate::providers::Provider for CodexProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/codex")
+            .join(name);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
+        serde_json::from_str(&raw).expect("parse fixture json")
+    }
+
+    #[test]
+    fn format_window_duration_prefers_days_over_hours() {
+        assert_eq!(format_window_duration(18000), "5h");
+        assert_eq!(format_window_duration(604800), "7d");
+        assert_eq!(format_window_duration(86400), "1d");
+        assert_eq!(format_window_duration(90), "90s");
+    }
 
     #[test]
     fn parses_codex_wham_usage() {
@@ -297,5 +332,61 @@ mod tests {
         assert_eq!(quota.windows[1].window_type, "7d");
         assert_eq!(quota.windows[2].window_type, "credits");
         assert_eq!(quota.windows[2].remaining, 4250);
+    }
+
+    #[test]
+    fn parses_live_wham_usage_fixture_primary_week_only() {
+        // Captured 2026-07-13 from chatgpt.com/backend-api/wham/usage.
+        // Pro plans currently expose a single primary window of 604800s
+        // (7 days) with secondary_window=null — previously this rendered
+        // as the ugly "168h" label (604800/3600).
+        let body = fixture("wham_usage_live.json");
+        let quota = parse_usage(&body);
+
+        assert!(quota.plan_name.contains("pro"));
+        assert!(
+            !quota.windows.iter().any(|w| w.window_type.contains("168h")),
+            "must not emit 168h labels: {:?}",
+            quota.windows.iter().map(|w| &w.window_type).collect::<Vec<_>>()
+        );
+
+        let week = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "7d")
+            .expect("7d primary window");
+        assert_eq!(week.used, 76);
+        assert_eq!(week.limit, 100);
+        assert_eq!(week.remaining, 24);
+        assert_eq!(week.period_seconds, Some(604800));
+        assert!(week.reset_at.is_some());
+
+        let spark = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "spk/7d")
+            .expect("spk/7d additional limit");
+        assert_eq!(spark.used, 0);
+        assert_eq!(spark.limit, 100);
+        assert_eq!(spark.period_seconds, Some(604800));
+    }
+
+    #[test]
+    fn primary_week_window_labels_as_7d_not_168h() {
+        let body = serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1744934400i64
+                },
+                "secondary_window": null
+            },
+            "credits": { "balance": "0", "unlimited": false }
+        });
+        let quota = parse_usage(&body);
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0].window_type, "7d");
     }
 }

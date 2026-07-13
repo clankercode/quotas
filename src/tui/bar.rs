@@ -226,6 +226,20 @@ pub fn bucket_label(bucket: u8) -> Option<&'static str> {
 /// provider-agnostic rename table so ugly names read better in the UI.
 /// If stripping would leave an empty string, keep the original.
 pub fn display_label(window_type: &str, show_headers: bool) -> String {
+    // Cosmetic: Codex (and any other provider) used to emit `168h` for a
+    // 7-day window (604800s / 3600). Prefer the human `7d` label at draw
+    // time so cached/stale keys still read well. Only rewrite the duration
+    // token (`168h` or `…/168h`), not an arbitrary substring.
+    let rewritten;
+    let window_type = if window_type == "168h" {
+        "7d"
+    } else if let Some(prefix) = window_type.strip_suffix("/168h") {
+        rewritten = format!("{prefix}/7d");
+        rewritten.as_str()
+    } else {
+        window_type
+    };
+
     // First, the rename table — applies regardless of show_headers
     // because these are purely cosmetic improvements to the raw key.
     let renamed = match window_type {
@@ -360,6 +374,15 @@ mod tests {
         // collocates with the "monthly" bucket in the TUI.
         assert_eq!(display_label("total_quota", false), "total");
         assert_eq!(display_label("total_quota", true), "total");
+    }
+
+    #[test]
+    fn display_label_rewrites_168h_to_7d() {
+        // Codex pro currently returns a 604800s primary window which older
+        // parsers labelled `168h`. Draw-time rewrite keeps cards readable
+        // even for cached keys.
+        assert_eq!(display_label("168h", false), "7d");
+        assert_eq!(display_label("spk/168h", false), "spk/7d");
     }
 
     #[test]

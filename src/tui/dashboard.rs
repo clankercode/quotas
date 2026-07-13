@@ -27,6 +27,8 @@ pub enum HitResult {
     AutoRefreshToggle,
     /// The Quit button was clicked.
     Quit,
+    /// The footer "update X.Y.Z" link was clicked — open the release page.
+    OpenUpdate,
 }
 
 #[derive(Clone)]
@@ -75,6 +77,8 @@ pub struct Dashboard {
     refresh_btn: Cell<Option<Rect>>,
     auto_refresh_btn: Cell<Option<Rect>>,
     quit_btn: Cell<Option<Rect>>,
+    /// Hit area for the footer "update X.Y.Z" release link.
+    update_btn: Cell<Option<Rect>>,
 }
 
 impl Dashboard {
@@ -102,6 +106,7 @@ impl Dashboard {
             refresh_btn: Cell::new(None),
             auto_refresh_btn: Cell::new(None),
             quit_btn: Cell::new(None),
+            update_btn: Cell::new(None),
         }
     }
 
@@ -131,6 +136,7 @@ impl Dashboard {
             refresh_btn: Cell::new(None),
             auto_refresh_btn: Cell::new(None),
             quit_btn: Cell::new(None),
+            update_btn: Cell::new(None),
         };
         if all_done {
             dashboard.stable_order = dashboard.compute_visual_order();
@@ -162,12 +168,23 @@ impl Dashboard {
         if self.quit_btn.get().is_some_and(in_rect) {
             return Some(HitResult::Quit);
         }
+        if self.update_btn.get().is_some_and(in_rect) {
+            return Some(HitResult::OpenUpdate);
+        }
         for &(area, vpos) in self.card_hit_areas.borrow().iter() {
             if in_rect(area) {
                 return Some(HitResult::Card(vpos));
             }
         }
         None
+    }
+
+    /// Latest available update, when the footer link is shown.
+    pub fn update_release_url(&self) -> Option<String> {
+        self.update_info
+            .as_ref()
+            .filter(|info| info.is_update_available())
+            .map(|info| info.release_page_url())
     }
 
     /// Whether the entry at `idx` (by kinds index) has a completed result.
@@ -806,12 +823,29 @@ impl Dashboard {
         f.render_widget(title, title_area);
 
         let loaded = total.saturating_sub(loading_count);
-        let footer = Paragraph::new(footer_line(
+        let update_hovered = self.update_btn.get().is_some_and(|r| {
+            mouse.is_some_and(|(c, row)| {
+                c >= r.x && c < r.x + r.width && row >= r.y && row < r.y + r.height
+            })
+        });
+        let footer_layout = footer_line(
             loaded,
             total,
             &unconfigured,
             self.update_info.as_ref(),
-        ));
+            update_hovered,
+        );
+        if let Some((offset, width)) = footer_layout.update_hit {
+            self.update_btn.set(Some(Rect::new(
+                footer_area.x.saturating_add(offset),
+                footer_area.y,
+                width,
+                1,
+            )));
+        } else {
+            self.update_btn.set(None);
+        }
+        let footer = Paragraph::new(footer_layout.line);
         f.render_widget(footer, footer_area);
 
         let order = self.visual_order();
@@ -1348,12 +1382,20 @@ enum RenderMode {
     OneLine,
 }
 
+struct FooterLayout {
+    line: Line<'static>,
+    /// Column offset (from the left of the footer) and width of the
+    /// clickable "update X.Y.Z" link, when present.
+    update_hit: Option<(u16, u16)>,
+}
+
 fn footer_line(
     loaded: usize,
     total: usize,
     unconfigured: &[&str],
     update_info: Option<&UpdateInfo>,
-) -> Line<'static> {
+    update_hovered: bool,
+) -> FooterLayout {
     let mut spans = if unconfigured.is_empty() {
         vec![Span::styled(
             format!("{} of {} providers loaded", loaded, total),
@@ -1371,15 +1413,31 @@ fn footer_line(
         )]
     };
 
+    let mut update_hit = None;
     if let Some(update) = update_info.filter(|info| info.is_update_available()) {
         spans.push(Span::styled("  ·  ", Style::new().dim()));
-        spans.push(Span::styled(
-            format!("update {}", update.latest_version),
-            Style::new().fg(Color::Cyan).dim(),
-        ));
+        let notice = format!("update {}", update.latest_version);
+        // Offset is the display width of everything already in the line.
+        let offset: u16 = spans
+            .iter()
+            .map(|s| s.content.chars().count() as u16)
+            .sum();
+        let width = notice.chars().count() as u16;
+        let style = if update_hovered {
+            Style::new().fg(Color::White).bold().underlined()
+        } else {
+            // Cyan + underline signals "this is a link"; dim keeps it
+            // subtle until hovered.
+            Style::new().fg(Color::Cyan).dim().underlined()
+        };
+        spans.push(Span::styled(notice, style));
+        update_hit = Some((offset, width));
     }
 
-    Line::from(spans)
+    FooterLayout {
+        line: Line::from(spans),
+        update_hit,
+    }
 }
 
 /// Pick the densest rendering that fits the most windows in the available
@@ -1660,17 +1718,34 @@ mod tests {
             checked_at: chrono::Utc::now(),
         };
 
-        let line = footer_line(6, 6, &[], Some(&update));
-        let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let layout = footer_line(6, 6, &[], Some(&update), false);
+        let rendered: String = layout
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
 
         assert_eq!(rendered, "6 of 6 providers loaded  ·  update 0.8.2");
-        let notice = line
+        let notice = layout
+            .line
             .spans
             .iter()
             .find(|span| span.content.as_ref() == "update 0.8.2")
             .expect("update notice span should be present");
         assert_eq!(notice.style.fg, Some(Color::Cyan));
         assert!(notice.style.add_modifier.contains(Modifier::DIM));
+        assert!(
+            notice.style.add_modifier.contains(Modifier::UNDERLINED),
+            "update notice should look like a link"
+        );
+        assert_eq!(
+            layout.update_hit,
+            Some((
+                "6 of 6 providers loaded  ·  ".chars().count() as u16,
+                "update 0.8.2".chars().count() as u16
+            ))
+        );
     }
 
     #[test]
@@ -1681,10 +1756,35 @@ mod tests {
             checked_at: chrono::Utc::now(),
         };
 
-        let line = footer_line(6, 6, &[], Some(&update));
-        let rendered: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let layout = footer_line(6, 6, &[], Some(&update), false);
+        let rendered: String = layout
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
 
         assert_eq!(rendered, "6 of 6 providers loaded");
+        assert_eq!(layout.update_hit, None);
+    }
+
+    #[test]
+    fn footer_update_link_hovers_bold_white() {
+        let update = UpdateInfo {
+            current_version: "0.8.1".into(),
+            latest_version: "0.8.2".into(),
+            checked_at: chrono::Utc::now(),
+        };
+        let layout = footer_line(6, 6, &[], Some(&update), true);
+        let notice = layout
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "update 0.8.2")
+            .expect("update notice");
+        assert_eq!(notice.style.fg, Some(Color::White));
+        assert!(notice.style.add_modifier.contains(Modifier::BOLD));
+        assert!(notice.style.add_modifier.contains(Modifier::UNDERLINED));
     }
 
     #[test]
@@ -1719,6 +1819,17 @@ mod tests {
 
         assert_eq!(notice_cell.fg, Color::Cyan);
         assert!(notice_cell.modifier.contains(Modifier::DIM));
+        assert!(notice_cell.modifier.contains(Modifier::UNDERLINED));
+
+        // Hit-test the notice region and ensure it maps to OpenUpdate.
+        let hit = dashboard
+            .hit_test(notice_start as u16, footer_y)
+            .expect("update notice should be clickable");
+        assert!(matches!(hit, HitResult::OpenUpdate));
+        assert_eq!(
+            dashboard.update_release_url().as_deref(),
+            Some("https://github.com/clankercode/quotas/releases/tag/v0.8.2")
+        );
     }
 
     #[test]

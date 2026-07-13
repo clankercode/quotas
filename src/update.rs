@@ -26,6 +26,45 @@ impl UpdateInfo {
             self.latest_version, self.current_version
         )
     }
+
+    /// GitHub release page for the latest version (opens from the TUI footer).
+    pub fn release_page_url(&self) -> String {
+        release_page_url(&self.latest_version)
+    }
+}
+
+/// URL of the GitHub release page for `version` (with or without a leading `v`).
+pub fn release_page_url(version: &str) -> String {
+    let repo = env!("CARGO_PKG_REPOSITORY").trim_end_matches('/');
+    let v = version.trim_start_matches('v');
+    format!("{repo}/releases/tag/v{v}")
+}
+
+/// Open a URL in the user's default browser. Best-effort — failures are silent
+/// so a missing `xdg-open`/`open` never breaks the TUI event loop.
+pub fn open_url(url: &str) {
+    let _ = open_url_impl(url);
+}
+
+fn open_url_impl(url: &str) -> std::io::Result<std::process::Child> {
+    if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn()
+    } else if cfg!(target_os = "windows") {
+        // Empty title arg after `start` keeps URLs with `&` from being parsed
+        // as extra commands.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+    } else {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .or_else(|_| {
+                std::process::Command::new("gio")
+                    .args(["open", url])
+                    .spawn()
+            })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,6 +205,21 @@ mod tests {
         });
 
         assert_eq!(parse_latest_version(&body).as_deref(), Some("0.8.2"));
+    }
+
+    #[test]
+    fn release_page_url_uses_package_repository() {
+        let url = release_page_url("0.8.2");
+        assert!(
+            url.ends_with("/releases/tag/v0.8.2"),
+            "unexpected release url: {url}"
+        );
+        assert!(
+            url.starts_with("https://github.com/"),
+            "expected github host: {url}"
+        );
+        // Leading v should not be doubled.
+        assert_eq!(release_page_url("v0.8.2"), release_page_url("0.8.2"));
     }
 
     #[test]

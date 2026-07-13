@@ -41,8 +41,12 @@ pub fn read_cache() -> CacheFile {
 
 fn rehydrate_cached_results(cache: &mut CacheFile) {
     for entry in cache.entries.values_mut() {
-        if entry.result.kind == ProviderKind::Gemini {
-            rehydrate_gemini_result(&mut entry.result);
+        match entry.result.kind {
+            ProviderKind::Gemini => rehydrate_gemini_result(&mut entry.result),
+            // Re-parse so label/window changes (e.g. 168h → 7d) apply to
+            // cached entries without waiting for the next live refresh.
+            ProviderKind::Codex => rehydrate_codex_result(&mut entry.result),
+            _ => {}
         }
     }
 }
@@ -54,6 +58,14 @@ fn rehydrate_gemini_result(result: &mut ProviderResult) {
     let Ok(quota) = crate::providers::gemini::parse_quota(raw) else {
         return;
     };
+    result.status = ProviderStatus::Available { quota };
+}
+
+fn rehydrate_codex_result(result: &mut ProviderResult) {
+    let Some(raw) = &result.raw_response else {
+        return;
+    };
+    let quota = crate::providers::codex::parse_usage(raw);
     result.status = ProviderStatus::Available { quota };
 }
 
@@ -208,5 +220,78 @@ mod tests {
         assert_eq!(quota.windows[0].limit, 100);
         assert_eq!(quota.windows[0].remaining, 96);
         assert_eq!(quota.windows[0].used, 4);
+    }
+
+    #[test]
+    fn read_cache_rehydrates_codex_week_window_labels() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let previous_xdg = std::env::var_os("XDG_CACHE_HOME");
+        let cache_root = std::env::temp_dir().join(format!(
+            "quotas-cache-codex-test-{}",
+            std::process::id()
+        ));
+        let cache_dir = cache_root.join("quotas");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let cached_at = Utc::now();
+        // Stale status used the old 168h label; raw_response has a 7-day
+        // primary window that the current parser labels `7d`.
+        let result = ProviderResult {
+            kind: ProviderKind::Codex,
+            status: ProviderStatus::Available {
+                quota: crate::providers::ProviderQuota {
+                    plan_name: "stale".into(),
+                    windows: vec![crate::providers::QuotaWindow {
+                        window_type: "168h".into(),
+                        used: 76,
+                        limit: 100,
+                        remaining: 24,
+                        reset_at: None,
+                        period_seconds: Some(604800),
+                    }],
+                    unlimited: false,
+                },
+            },
+            fetched_at: cached_at,
+            raw_response: Some(serde_json::json!({
+                "plan_type": "pro",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 76,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1744934400i64
+                    },
+                    "secondary_window": null
+                },
+                "credits": { "balance": "0", "unlimited": false }
+            })),
+            auth_source: None,
+            cached_at: None,
+        };
+        let mut file = CacheFile::default();
+        file.entries
+            .insert("codex".into(), CacheEntry { result, cached_at });
+        std::fs::write(
+            cache_dir.join("cache.json"),
+            serde_json::to_string(&file).unwrap(),
+        )
+        .unwrap();
+
+        std::env::set_var("XDG_CACHE_HOME", &cache_root);
+        let cache = read_cache();
+        if let Some(value) = previous_xdg {
+            std::env::set_var("XDG_CACHE_HOME", value);
+        } else {
+            std::env::remove_var("XDG_CACHE_HOME");
+        }
+        let _ = std::fs::remove_dir_all(cache_root);
+
+        let codex = cache.entries.get("codex").unwrap();
+        let ProviderStatus::Available { quota } = &codex.result.status else {
+            panic!("expected available Codex quota");
+        };
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0].window_type, "7d");
+        assert_eq!(quota.windows[0].used, 76);
     }
 }
