@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- **Grok `x-grok-client-version` no longer hardcodes a stale release.** Resolved at runtime from `$GROK_HOME/version.json` / `~/.grok/version.json` (written by the CLI), falling back to `grok --version`, then `0.0.0` only if neither is available.
+## 0.10.1 - 2026-07-14
+
 - **Codex banked rate-limit reset credits** surfaced in the TUI. Usage already includes `rate_limit_reset_credits.available_count`; quotas now parses it into `ProviderQuota.banked_resets` and, when the count is > 0, fetches `GET …/wham/rate-limit-reset-credits` for per-credit title/expiry/source. **Card** plan line shows `· N banked reset(s)` when available; **detail** adds a banked-resets section with each credit. Live fixture `tests/fixtures/codex/rate_limit_reset_credits_live.json`. Redeeming a credit is not implemented (display only).
 - **Detail raw section shows multi-endpoint extras after the main payload.** Codex stores `{ usage, rate_limit_reset_credits }` when the banked-credits endpoint is fetched; the TUI renders each envelope part under its own subheader (Cursor/Grok/OpenRouter multi-part raw already used this shape and now gets the same sequential layout). Flat single-endpoint bodies are unchanged.
+- **Grok `x-grok-client-version` no longer hardcodes a stale release.** Resolved at runtime from `$GROK_HOME/version.json` / `~/.grok/version.json` (written by the CLI), falling back to `grok --version`, then `0.0.0` only if neither is available.
 - **TUI footer update link no longer paints `xdg-open` errors over the dashboard.** Opening the release URL redirects the helper's stdin/stdout/stderr to null (and prefers `$BROWSER` when set), so a pane without a desktop handler (e.g. multiplexed/SSH sessions) fails silently instead of flooding the alternate screen with `www-browser: command not found` / `no method available for opening 'https://…'`.
 
 ## 0.10.0 - 2026-07-14
