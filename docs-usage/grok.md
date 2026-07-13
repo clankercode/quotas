@@ -31,6 +31,8 @@ We pick the newest non-expired `key` entry.
 Base: `https://cli-chat-proxy.grok.com`  
 Headers: `Authorization: Bearer <session>`, `x-grok-client-version`, `x-grok-client-surface: grok-build`
 
+`x-grok-client-version` is resolved from the installed Grok Build client (not hardcoded): `$GROK_HOME/version.json` or `~/.grok/version.json` first, then `grok --version` (~40ms) if the file is missing.
+
 #### 1. Default monthly $ allowance
 
 `GET /v1/billing`

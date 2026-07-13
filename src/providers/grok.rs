@@ -5,12 +5,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::PathBuf;
+use std::sync::OnceLock;
 
 const CLI_CHAT_BASE: &str = "https://cli-chat-proxy.grok.com";
 const MGMT_BASE: &str = "https://management-api.x.ai";
 const CONSOLE_URL: &str = "https://console.x.ai/team/default/billing";
 const GROK_USAGE_URL: &str = "https://grok.com?_s=usage";
-const GROK_CLIENT_VERSION: &str = "0.2.93";
+/// Last-resort header value only when Grok is not installed and no
+/// `version.json` is on disk. Prefer resolving the real installed version.
+const GROK_CLIENT_VERSION_FALLBACK: &str = "0.0.0";
 
 pub struct GrokProvider {
     http: Client,
@@ -61,19 +65,20 @@ impl GrokProvider {
         // `?format=credits` = rolling weekly product usage % (what Grok Build's
         // /usage UI shows under WEEKLY) plus prepaid/on-demand fields.
         let auth_hdr = format!("Bearer {}", key);
+        let client_version = resolve_grok_client_version();
         let (default_resp, credits_resp) = tokio::join!(
             self.http
                 .get(format!("{}/v1/billing", CLI_CHAT_BASE))
                 .header("Authorization", &auth_hdr)
                 .header("Accept", "application/json")
-                .header("x-grok-client-version", GROK_CLIENT_VERSION)
+                .header("x-grok-client-version", client_version.as_str())
                 .header("x-grok-client-surface", "grok-build")
                 .send(),
             self.http
                 .get(format!("{}/v1/billing?format=credits", CLI_CHAT_BASE))
                 .header("Authorization", &auth_hdr)
                 .header("Accept", "application/json")
-                .header("x-grok-client-version", GROK_CLIENT_VERSION)
+                .header("x-grok-client-version", client_version.as_str())
                 .header("x-grok-client-surface", "grok-build")
                 .send(),
         );
@@ -259,6 +264,97 @@ fn extract_error_message(body: &serde_json::Value) -> Option<String> {
         .or_else(|| body.get("error").filter(|e| e.is_string()))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+/// Resolve `x-grok-client-version` from the installed Grok Build client.
+///
+/// Preference order (cached for the process lifetime):
+/// 1. `$GROK_HOME/version.json` or `~/.grok/version.json` (written by the CLI)
+/// 2. `grok --version` (~40ms local; only if the file is missing)
+/// 3. [`GROK_CLIENT_VERSION_FALLBACK`] when neither is available
+fn resolve_grok_client_version() -> String {
+    static CACHED: OnceLock<String> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            read_grok_version_from_file()
+                .or_else(read_grok_version_from_cli)
+                .unwrap_or_else(|| GROK_CLIENT_VERSION_FALLBACK.to_string())
+        })
+        .clone()
+}
+
+fn grok_version_json_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(home) = std::env::var("GROK_HOME") {
+        if !home.is_empty() {
+            paths.push(PathBuf::from(home).join("version.json"));
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".grok/version.json"));
+    }
+    paths
+}
+
+/// Parse Grok's `version.json` (`{"version": "0.2.99", ...}`).
+pub(crate) fn parse_grok_version_json(content: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(content).ok()?;
+    let ver = v.get("version")?.as_str()?.trim();
+    if ver.is_empty() || ver == "null" {
+        return None;
+    }
+    // Basic sanity: look like a semver-ish tag, not garbage.
+    if !ver
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(ver.to_string())
+}
+
+fn read_grok_version_from_file() -> Option<String> {
+    for path in grok_version_json_paths() {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if let Some(v) = parse_grok_version_json(&content) {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// Parse `grok --version` stdout, e.g. `grok 0.2.99 (b1b49ccb71)`.
+pub(crate) fn parse_grok_version_cli_output(stdout: &str) -> Option<String> {
+    // Prefer the first token that looks like x.y or x.y.z…
+    for token in stdout.split_whitespace() {
+        let t = token.trim().trim_matches(|c: char| c == ',' || c == ';');
+        if t.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && t.contains('.')
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '+')
+        {
+            return Some(t.to_string());
+        }
+    }
+    None
+}
+
+fn read_grok_version_from_cli() -> Option<String> {
+    let output = std::process::Command::new("grok")
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() && output.stdout.is_empty() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_grok_version_cli_output(&stdout)
 }
 
 /// xAI amounts are USD cents as decimal strings (or numbers). Convert to
@@ -714,6 +810,35 @@ mod tests {
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read fixture {}: {}", path.display(), e));
         serde_json::from_str(&raw).expect("parse fixture json")
+    }
+
+    #[test]
+    fn parse_grok_version_json_reads_version_field() {
+        let raw = r#"{
+            "version": "0.2.99",
+            "stable_version": null,
+            "checked_at": "2026-07-13T20:21:35.514284689Z"
+        }"#;
+        assert_eq!(
+            parse_grok_version_json(raw).as_deref(),
+            Some("0.2.99")
+        );
+        assert!(parse_grok_version_json("{}").is_none());
+        assert!(parse_grok_version_json(r#"{"version":""}"#).is_none());
+        assert!(parse_grok_version_json(r#"{"version":"not-a-version"}"#).is_none());
+    }
+
+    #[test]
+    fn parse_grok_version_cli_output_extracts_semver() {
+        assert_eq!(
+            parse_grok_version_cli_output("grok 0.2.99 (b1b49ccb71)").as_deref(),
+            Some("0.2.99")
+        );
+        assert_eq!(
+            parse_grok_version_cli_output("0.2.99\n").as_deref(),
+            Some("0.2.99")
+        );
+        assert!(parse_grok_version_cli_output("error: not found").is_none());
     }
 
     #[test]
