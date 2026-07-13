@@ -28,7 +28,7 @@ Research date: 2026-04-13
 |--------|----------|-----------------------|
 | `[ ]`  | **Groq** | Rate limits in response headers (`x-ratelimit-limit-tokens`, etc.) per model. Cheap/free tier has hard TPM caps. Need to make a probe request to read headers. User offered a key. |
 | `[ ]`  | **GitHub Copilot** | Subscription plan (Individual / Business / Enterprise). `/copilot_internal/v2/token` used by the extension. No public usage/quota REST endpoint documented; may need to scrape. |
-| `[ ]`  | **Google Gemini** | `generativelanguage.googleapis.com` — free tier has RPM/TPD limits per model surfaced as 429. No dedicated quota endpoint; rate-limit headers present on responses. Paid via Google Cloud (no simple balance endpoint). |
+| `[x]`  | **Antigravity (agy)** | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` — 2 groups (Gemini / Claude+GPT) × (5h + weekly). Requires `User-Agent: antigravity`. OAuth via `~/.gemini/antigravity-cli/antigravity-oauth-token`. |
 | `[ ]`  | **GitHub Copilot for CLI** | Subset of Copilot — same auth path, different quota surface. |
 
 ---

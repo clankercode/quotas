@@ -658,30 +658,46 @@ mod tests {
         lines.join("\n")
     }
 
-    fn gemini_fraction_quota_result() -> ProviderResult {
+    fn antigravity_summary_quota_result() -> ProviderResult {
         ProviderResult {
-            kind: ProviderKind::Gemini,
+            kind: ProviderKind::Antigravity,
             status: ProviderStatus::Available {
                 quota: ProviderQuota {
-                    plan_name: "Gemini API".into(),
-                    windows: vec![QuotaWindow {
-                        window_type: "REQUESTS_gemini-2.5-flash".into(),
-                        used: 4,
-                        limit: 100,
-                        remaining: 96,
-                        reset_at: Some(
-                            chrono::DateTime::parse_from_rfc3339("2026-04-18T04:00:00Z")
-                                .unwrap()
-                                .with_timezone(&chrono::Utc),
-                        ),
-                        period_seconds: None,
-                    }],
+                    plan_name: "Antigravity".into(),
+                    windows: vec![
+                        QuotaWindow {
+                            window_type: "7d/gemini".into(),
+                            used: 18,
+                            limit: 100,
+                            remaining: 82,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-19T17:07:49Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(7 * 86400),
+                        },
+                        QuotaWindow {
+                            window_type: "5h/gemini".into(),
+                            used: 2,
+                            limit: 100,
+                            remaining: 98,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-13T18:32:16Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(5 * 3600),
+                        },
+                    ],
                     unlimited: false,
                 },
             },
             fetched_at: chrono::Utc::now(),
             raw_response: None,
-            auth_source: Some("oauth:/home/xertrov/.gemini/oauth_creds.json".into()),
+            auth_source: Some(
+                "oauth:/home/xertrov/.gemini/antigravity-cli/antigravity-oauth-token".into(),
+            ),
             cached_at: None,
         }
     }
@@ -780,41 +796,47 @@ mod tests {
     }
 
     #[test]
-    fn renders_gemini_fraction_quota_with_exact_counts() {
-        let out = render_detail_text(gemini_fraction_quota_result(), 100, 18);
+    fn renders_antigravity_group_quota_with_exact_counts() {
+        // height ≥ 20 so Auto mode stays Normal with 2 windows (else Compact).
+        let out = render_detail_text(antigravity_summary_quota_result(), 100, 24);
 
-        assert!(out.contains("Gemini API"));
-        assert!(out.contains("4% used"));
-        assert!(out.contains("4 used"));
-        assert!(out.contains("96 left"));
-        assert!(out.contains("100 cap"));
-        assert!(out.contains("resets in"));
+        assert!(out.contains("Antigravity"), "out:\n{out}");
+        // 7d/gemini: 18 used / 82 left / 100 cap
+        assert!(out.contains("18% used"), "out:\n{out}");
+        assert!(out.contains("18 used"), "out:\n{out}");
+        assert!(out.contains("82 left"), "out:\n{out}");
+        assert!(out.contains("100 cap"), "out:\n{out}");
+        assert!(out.contains("resets in"), "out:\n{out}");
+        assert!(
+            out.contains("gemini") || out.contains("7d/gemini") || out.contains("5h/gemini"),
+            "out:\n{out}"
+        );
     }
 
     #[test]
     fn moves_plan_into_header_above_the_fold() {
-        let out = render_detail_text(gemini_fraction_quota_result(), 80, 18);
+        let out = render_detail_text(antigravity_summary_quota_result(), 80, 18);
         let lines: Vec<&str> = out.lines().collect();
 
-        assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
+        assert!(lines.get(1).is_some_and(|line| line.contains("Antigravity")));
         assert!(lines.get(1).is_some_and(|line| line.contains("Updated")));
-        assert!(lines.get(1).is_some_and(|line| line.contains("Gemini API")));
         assert!(lines
             .get(2)
             .is_some_and(|line| line.contains("auth: oauth")));
         assert!(
-            lines.iter().take(4).any(|line| line.contains("Gemini API")),
+            lines.iter().take(4).any(|line| line.contains("Antigravity")),
             "expected plan name near the header"
         );
     }
 
     #[test]
     fn compact_layout_kicks_in_for_short_detail_view() {
-        let out = render_detail_text(gemini_fraction_quota_result(), 80, 10);
+        let out = render_detail_text(antigravity_summary_quota_result(), 80, 10);
 
-        assert!(out.contains("Gemini API"));
+        assert!(out.contains("Antigravity"));
         assert!(out.contains("Updated"));
-        assert!(!out.contains("4 used · 96 left · 100 cap"));
+        // Compact mode drops the long "X used · Y left · Z cap" trail.
+        assert!(!out.contains("18 used · 82 left · 100 cap"));
     }
 
     #[test]

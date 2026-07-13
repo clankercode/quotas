@@ -10,11 +10,14 @@ readme = "README.md"
 keywords = ["cli", "tui", "quota", "usage", "llm"]
 categories = ["command-line-utilities"]
 authors = ["Max Kaye"]
-rust-version = "1.75"
+# rusqlite 0.40 → libsqlite3-sys 0.38 uses std::cfg_select (stable since 1.95).
+# toml 1.1 requires 1.85; reqwest 0.13 is fine on older.
+rust-version = "1.95"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+# 0.13: rustls-tls renamed to rustls; form is no longer default (used by OAuth).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
@@ -24,12 +27,12 @@ chrono = { version = "0.4", features = ["serde"] }
 arboard = "3"
 url = "2"
 async-trait = "0.1"
-toml = "0.9"
+toml = "1"
 gethostname = "1"
 base64 = "0.22"
 # Cursor IDE stores its session token in a SQLite globalStorage DB
 # (state.vscdb); bundled so we don't depend on a system libsqlite.
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 ratatui = "0.30"
 crossterm = "0.29"

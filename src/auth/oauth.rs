@@ -193,29 +193,33 @@ impl OAuthFileResolver {
         }
     }
 
-    pub fn gemini() -> Self {
+    pub fn antigravity() -> Self {
         let mut paths: Vec<PathBuf> = Vec::new();
         if let Some(home) = dirs::home_dir() {
-            // Gemini CLI oauth first; if expired, parse returns None and we
-            // fall through to the Antigravity (agy) token which shares the
-            // same Code Assist quota endpoint.
-            paths.push(home.join(".gemini/oauth_creds.json"));
+            // Prefer Antigravity (agy) token — that is what the CLI refreshes.
+            // Fall back to legacy Gemini CLI oauth_creds.json when agy is absent.
             paths.push(
                 home.join(".gemini/antigravity-cli/antigravity-oauth-token"),
             );
+            paths.push(home.join(".gemini/oauth_creds.json"));
         }
         if let Ok(gemini_home) = std::env::var("GEMINI_CLI_HOME") {
             if !gemini_home.is_empty() {
                 let base = PathBuf::from(gemini_home);
-                paths.insert(0, base.join("oauth_creds.json"));
-                paths.insert(1, base.join("antigravity-cli/antigravity-oauth-token"));
+                paths.insert(0, base.join("antigravity-cli/antigravity-oauth-token"));
+                paths.insert(1, base.join("oauth_creds.json"));
             }
         }
         Self {
             file_paths: paths,
             parse_fn: parse_gemini_credentials,
-            source_name: "gemini".to_string(),
+            source_name: "antigravity".to_string(),
         }
+    }
+
+    /// Deprecated alias — prefer [`Self::antigravity`].
+    pub fn gemini() -> Self {
+        Self::antigravity()
     }
 
     /// Grok Build CLI session token from `~/.grok/auth.json` (or `$GROK_HOME/auth.json`).

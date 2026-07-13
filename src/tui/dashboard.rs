@@ -832,6 +832,7 @@ impl Dashboard {
             loaded,
             total,
             &unconfigured,
+            env!("CARGO_PKG_VERSION"),
             self.update_info.as_ref(),
             update_hovered,
         );
@@ -1393,6 +1394,7 @@ fn footer_line(
     loaded: usize,
     total: usize,
     unconfigured: &[&str],
+    current_version: &str,
     update_info: Option<&UpdateInfo>,
     update_hovered: bool,
 ) -> FooterLayout {
@@ -1412,6 +1414,12 @@ fn footer_line(
             Style::new().dim(),
         )]
     };
+
+    // Permanent current-version label (always shown). Update notice, when
+    // present, sits to its right so the version stays visible either way.
+    let version_label = format!("v{}", current_version.trim_start_matches('v'));
+    spans.push(Span::styled("  ·  ", Style::new().dim()));
+    spans.push(Span::styled(version_label, Style::new().dim()));
 
     let mut update_hit = None;
     if let Some(update) = update_info.filter(|info| info.is_update_available()) {
@@ -1644,30 +1652,70 @@ mod tests {
         }
     }
 
-    fn gemini_fraction_quota_result() -> ProviderResult {
+    fn antigravity_summary_quota_result() -> ProviderResult {
         ProviderResult {
-            kind: ProviderKind::Gemini,
+            kind: ProviderKind::Antigravity,
             status: ProviderStatus::Available {
                 quota: ProviderQuota {
-                    plan_name: "Gemini API".into(),
-                    windows: vec![QuotaWindow {
-                        window_type: "REQUESTS_gemini-2.5-flash".into(),
-                        used: 4,
-                        limit: 100,
-                        remaining: 96,
-                        reset_at: Some(
-                            chrono::DateTime::parse_from_rfc3339("2026-04-18T04:00:00Z")
-                                .unwrap()
-                                .with_timezone(&chrono::Utc),
-                        ),
-                        period_seconds: None,
-                    }],
+                    plan_name: "Antigravity".into(),
+                    windows: vec![
+                        QuotaWindow {
+                            window_type: "7d/gemini".into(),
+                            used: 18,
+                            limit: 100,
+                            remaining: 82,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-19T17:07:49Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(7 * 86400),
+                        },
+                        QuotaWindow {
+                            window_type: "5h/gemini".into(),
+                            used: 2,
+                            limit: 100,
+                            remaining: 98,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-13T18:32:16Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(5 * 3600),
+                        },
+                        QuotaWindow {
+                            window_type: "7d/3p".into(),
+                            used: 0,
+                            limit: 100,
+                            remaining: 100,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-20T14:17:18Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(7 * 86400),
+                        },
+                        QuotaWindow {
+                            window_type: "5h/3p".into(),
+                            used: 0,
+                            limit: 100,
+                            remaining: 100,
+                            reset_at: Some(
+                                chrono::DateTime::parse_from_rfc3339("2026-07-13T19:17:18Z")
+                                    .unwrap()
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            period_seconds: Some(5 * 3600),
+                        },
+                    ],
                     unlimited: false,
                 },
             },
             fetched_at: chrono::Utc::now(),
             raw_response: None,
-            auth_source: Some("oauth:/home/xertrov/.gemini/oauth_creds.json".into()),
+            auth_source: Some(
+                "oauth:/home/xertrov/.gemini/antigravity-cli/antigravity-oauth-token".into(),
+            ),
             cached_at: None,
         }
     }
@@ -1711,14 +1759,43 @@ mod tests {
     }
 
     #[test]
-    fn footer_line_shows_available_update_as_subtle_colored_notice() {
+    fn footer_line_always_shows_current_version() {
+        // No update available / no check yet — version still appears.
+        let layout = footer_line(6, 6, &[], "0.9.0", None, false);
+        let rendered: String = layout
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(rendered, "6 of 6 providers loaded  ·  v0.9.0");
+        assert_eq!(layout.update_hit, None);
+
+        let version = layout
+            .line
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "v0.9.0")
+            .expect("version label span");
+        assert!(
+            version.style.add_modifier.contains(Modifier::DIM),
+            "version label is permanent chrome, kept subtle"
+        );
+        assert!(
+            !version.style.add_modifier.contains(Modifier::UNDERLINED),
+            "version itself is not a link"
+        );
+    }
+
+    #[test]
+    fn footer_line_shows_available_update_to_the_right_of_version() {
         let update = UpdateInfo {
             current_version: "0.8.1".into(),
             latest_version: "0.8.2".into(),
             checked_at: chrono::Utc::now(),
         };
 
-        let layout = footer_line(6, 6, &[], Some(&update), false);
+        let layout = footer_line(6, 6, &[], "0.8.1", Some(&update), false);
         let rendered: String = layout
             .line
             .spans
@@ -1726,7 +1803,10 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
 
-        assert_eq!(rendered, "6 of 6 providers loaded  ·  update 0.8.2");
+        assert_eq!(
+            rendered,
+            "6 of 6 providers loaded  ·  v0.8.1  ·  update 0.8.2"
+        );
         let notice = layout
             .line
             .spans
@@ -1739,10 +1819,11 @@ mod tests {
             notice.style.add_modifier.contains(Modifier::UNDERLINED),
             "update notice should look like a link"
         );
+        // Hit box starts after the version label, not after the loaded count.
         assert_eq!(
             layout.update_hit,
             Some((
-                "6 of 6 providers loaded  ·  ".chars().count() as u16,
+                "6 of 6 providers loaded  ·  v0.8.1  ·  ".chars().count() as u16,
                 "update 0.8.2".chars().count() as u16
             ))
         );
@@ -1756,7 +1837,7 @@ mod tests {
             checked_at: chrono::Utc::now(),
         };
 
-        let layout = footer_line(6, 6, &[], Some(&update), false);
+        let layout = footer_line(6, 6, &[], "0.8.2", Some(&update), false);
         let rendered: String = layout
             .line
             .spans
@@ -1764,8 +1845,25 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
 
-        assert_eq!(rendered, "6 of 6 providers loaded");
+        assert_eq!(rendered, "6 of 6 providers loaded  ·  v0.8.2");
         assert_eq!(layout.update_hit, None);
+    }
+
+    #[test]
+    fn footer_line_strips_leading_v_from_current_version() {
+        // env!/callers may pass bare or v-prefixed; label always has one `v`.
+        let layout = footer_line(1, 1, &[], "v0.9.0", None, false);
+        let rendered: String = layout
+            .line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            rendered.ends_with("  ·  v0.9.0"),
+            "got {rendered:?}"
+        );
+        assert!(!rendered.contains("vv0.9.0"));
     }
 
     #[test]
@@ -1775,7 +1873,7 @@ mod tests {
             latest_version: "0.8.2".into(),
             checked_at: chrono::Utc::now(),
         };
-        let layout = footer_line(6, 6, &[], Some(&update), true);
+        let layout = footer_line(6, 6, &[], "0.8.1", Some(&update), true);
         let notice = layout
             .line
             .spans
@@ -1788,7 +1886,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_footer_renders_update_notice_with_accent_color() {
+    fn dashboard_footer_renders_version_and_update_notice() {
         let kinds = vec![ProviderKind::Claude];
         let entries = vec![ProviderEntry::Done(dummy_available_result(
             ProviderKind::Claude,
@@ -1810,9 +1908,22 @@ mod tests {
                     .unwrap_or(" ")
             })
             .collect();
+        let version_label = format!("v{}", env!("CARGO_PKG_VERSION"));
+        assert!(
+            footer_text.contains(&version_label),
+            "footer should always show current package version, got {footer_text:?}"
+        );
         let notice_start = footer_text
             .find("update 0.8.2")
             .expect("update notice should render in footer");
+        // Update sits to the right of the version label.
+        let version_start = footer_text
+            .find(&version_label)
+            .expect("version label in footer");
+        assert!(
+            notice_start > version_start,
+            "update notice should appear after version ({notice_start} > {version_start})"
+        );
         let notice_cell = buffer
             .cell((notice_start as u16, footer_y))
             .expect("notice cell should exist");
@@ -1822,6 +1933,12 @@ mod tests {
         assert!(notice_cell.modifier.contains(Modifier::UNDERLINED));
 
         // Hit-test the notice region and ensure it maps to OpenUpdate.
+        // Version itself is not clickable.
+        let version_hit = dashboard.hit_test(version_start as u16, footer_y);
+        assert!(
+            !matches!(version_hit, Some(HitResult::OpenUpdate)),
+            "version label must not open the release page"
+        );
         let hit = dashboard
             .hit_test(notice_start as u16, footer_y)
             .expect("update notice should be clickable");
@@ -1829,6 +1946,35 @@ mod tests {
         assert_eq!(
             dashboard.update_release_url().as_deref(),
             Some("https://github.com/clankercode/quotas/releases/tag/v0.8.2")
+        );
+    }
+
+    #[test]
+    fn dashboard_footer_shows_version_without_update_info() {
+        let kinds = vec![ProviderKind::Claude];
+        let entries = vec![ProviderEntry::Done(dummy_available_result(
+            ProviderKind::Claude,
+        ))];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        // No set_update_info — still shows package version.
+        let buffer = render_buffer(&dashboard, 80, 20);
+        let footer_y = 19;
+        let footer_text: String = (0..80)
+            .map(|x| {
+                buffer
+                    .cell((x, footer_y))
+                    .map(|c| c.symbol())
+                    .unwrap_or(" ")
+            })
+            .collect();
+        let version_label = format!("v{}", env!("CARGO_PKG_VERSION"));
+        assert!(
+            footer_text.contains(&version_label),
+            "expected {version_label:?} in footer, got {footer_text:?}"
+        );
+        assert!(
+            !footer_text.contains("update "),
+            "no update notice without update_info"
         );
     }
 
@@ -1925,17 +2071,25 @@ mod tests {
     }
 
     #[test]
-    fn renders_gemini_fraction_quota_on_card() {
-        let kinds = vec![ProviderKind::Gemini];
-        let entries = vec![ProviderEntry::Done(gemini_fraction_quota_result())];
+    fn renders_antigravity_group_quotas_on_card() {
+        let kinds = vec![ProviderKind::Antigravity];
+        let entries = vec![ProviderEntry::Done(antigravity_summary_quota_result())];
         let dashboard = Dashboard::new_with_entries(kinds, entries);
 
-        let out = render_text(&dashboard, 80, 20);
+        let out = render_text(&dashboard, 80, 24);
 
-        assert!(out.contains("Gemini API"));
-        assert!(out.contains("4%"));
-        assert!(out.contains("4/100"));
-        assert!(out.contains("2.5-flash") || out.contains("flash"));
+        assert!(out.contains("Antigravity"), "plan name: {out}");
+        // Group labels under 5h / 7d sections.
+        assert!(
+            out.contains("gemini") || out.contains("5h/gemini") || out.contains("7d/gemini"),
+            "expected gemini group window, got: {out}"
+        );
+        assert!(
+            out.contains("3p") || out.contains("5h/3p") || out.contains("7d/3p"),
+            "expected 3p group window, got: {out}"
+        );
+        // Fraction-based utilization (gemini weekly ~18% used).
+        assert!(out.contains("18%") || out.contains("82%"), "got: {out}");
     }
 
     #[test]
@@ -1943,16 +2097,16 @@ mod tests {
         let kinds = vec![
             ProviderKind::Claude,
             ProviderKind::Codex,
-            ProviderKind::Gemini,
+            ProviderKind::Antigravity,
         ];
         let entries = vec![
             ProviderEntry::Done(dummy_available_result(ProviderKind::Claude)),
             ProviderEntry::Done(dummy_available_result(ProviderKind::Codex)),
-            ProviderEntry::Done(dummy_available_result(ProviderKind::Gemini)),
+            ProviderEntry::Done(dummy_available_result(ProviderKind::Antigravity)),
         ];
         let mut dashboard = Dashboard::new_with_entries(kinds, entries);
 
-        dashboard.set_provider_favorite("gemini", true);
+        dashboard.set_provider_favorite("antigravity", true);
         dashboard.stable_order = dashboard.compute_visual_order();
 
         assert_eq!(dashboard.stable_order[0], 2);

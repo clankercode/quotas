@@ -2,7 +2,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 pub mod deepseek;
-pub mod gemini;
+pub mod antigravity;
 pub mod github_copilot;
 pub mod grok;
 pub mod kimi;
@@ -24,7 +24,10 @@ pub enum ProviderKind {
     Codex,
     Cursor,
     DeepSeek,
-    Gemini,
+    /// Google Antigravity (agy). `gemini` is accepted as a serde alias for
+    /// older cache/config that used the previous provider name.
+    #[serde(alias = "gemini")]
+    Antigravity,
     GitHubCopilot,
     Grok,
     Kimi,
@@ -52,7 +55,7 @@ impl ProviderKind {
             ProviderKind::Codex => "Codex",
             ProviderKind::Cursor => "Cursor",
             ProviderKind::DeepSeek => "DeepSeek",
-            ProviderKind::Gemini => "Gemini",
+            ProviderKind::Antigravity => "Antigravity",
             ProviderKind::GitHubCopilot => "Copilot",
             ProviderKind::Grok => "Grok",
             ProviderKind::Kimi => "Kimi",
@@ -70,7 +73,7 @@ impl ProviderKind {
             ProviderKind::Codex => "codex",
             ProviderKind::Cursor => "cursor",
             ProviderKind::DeepSeek => "deepseek",
-            ProviderKind::Gemini => "gemini",
+            ProviderKind::Antigravity => "antigravity",
             ProviderKind::GitHubCopilot => "github-copilot",
             ProviderKind::Grok => "grok",
             ProviderKind::Kimi => "kimi",
@@ -88,7 +91,7 @@ impl ProviderKind {
             ProviderKind::Codex,
             ProviderKind::Cursor,
             ProviderKind::DeepSeek,
-            ProviderKind::Gemini,
+            ProviderKind::Antigravity,
             ProviderKind::GitHubCopilot,
             ProviderKind::Grok,
             ProviderKind::Kimi,

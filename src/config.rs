@@ -106,10 +106,7 @@ impl Config {
             .collect();
         if self.providers.enabled.iter().any(|e| e == "*") {
             all.iter()
-                .filter(|k| {
-                    let slug = k.slug();
-                    !disabled_lower.iter().any(|d| d == slug)
-                })
+                .filter(|k| !disabled_lower.iter().any(|d| provider_name_matches(d, **k)))
                 .copied()
                 .collect()
         } else {
@@ -120,11 +117,31 @@ impl Config {
                 .map(|s| s.to_lowercase())
                 .collect();
             all.iter()
-                .filter(|k| enabled_lower.iter().any(|e| e == k.slug()))
+                .filter(|k| enabled_lower.iter().any(|e| provider_name_matches(e, **k)))
                 .copied()
                 .collect()
         }
     }
+}
+
+/// Match a config-file provider name against a kind. Accepts the kind's
+/// canonical slug plus a few historical aliases (e.g. `gemini` → Antigravity).
+fn provider_name_matches(name: &str, kind: crate::providers::ProviderKind) -> bool {
+    if name == kind.slug() {
+        return true;
+    }
+    matches!(
+        (name, kind),
+        ("gemini" | "agy", crate::providers::ProviderKind::Antigravity)
+            | ("moonshot", crate::providers::ProviderKind::Kimi)
+            | ("anthropic", crate::providers::ProviderKind::Claude)
+            | ("chatgpt" | "openai", crate::providers::ProviderKind::Codex)
+            | ("xai" | "x.ai", crate::providers::ProviderKind::Grok)
+            | (
+                "copilot" | "githubcopilot",
+                crate::providers::ProviderKind::GitHubCopilot
+            )
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -327,7 +344,7 @@ disabled = ["gemini", "kimi"]
 "#;
         let c: Config = toml::from_str(toml_str).unwrap();
         let enabled = c.providers_enabled_kinds();
-        assert!(!enabled.contains(&ProviderKind::Gemini));
+        assert!(!enabled.contains(&ProviderKind::Antigravity));
         assert!(!enabled.contains(&ProviderKind::Kimi));
         assert!(enabled.contains(&ProviderKind::Claude));
     }

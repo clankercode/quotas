@@ -199,10 +199,13 @@ fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthReso
             env_auth(&[("DEEPSEEK_API_KEY", "deepseek")]),
             key_file_auth(&[".deepseek"], "deepseek"),
         ]),
-        ProviderKind::Gemini => multi_auth(vec![
-            Box::new(OAuthFileResolver::gemini()),
-            env_auth(&[("GEMINI_API_KEY", "gemini")]),
-            key_file_auth(&[".gemini-api-key"], "gemini"),
+        ProviderKind::Antigravity => multi_auth(vec![
+            Box::new(OAuthFileResolver::antigravity()),
+            env_auth(&[
+                ("GEMINI_API_KEY", "antigravity"),
+                ("GOOGLE_API_KEY", "antigravity"),
+            ]),
+            key_file_auth(&[".gemini-api-key", ".antigravity-api-key"], "antigravity"),
         ]),
         ProviderKind::SiliconFlow => multi_auth(vec![
             env_auth(&[
@@ -301,7 +304,7 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
         "cursor" => Some(ProviderKind::Cursor),
         "deepseek" | "deep-seek" | "deep_seek" => Some(ProviderKind::DeepSeek),
-        "gemini" => Some(ProviderKind::Gemini),
+        "antigravity" | "agy" | "gemini" => Some(ProviderKind::Antigravity),
         "kimi" | "moonshot" => Some(ProviderKind::Kimi),
         "minimax" => Some(ProviderKind::Minimax),
         "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
@@ -385,7 +388,9 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
         ProviderKind::DeepSeek => {
             Box::new(quotas::providers::deepseek::DeepSeekProvider::new(auth))
         }
-        ProviderKind::Gemini => Box::new(quotas::providers::gemini::GeminiProvider::new(auth)),
+        ProviderKind::Antigravity => {
+            Box::new(quotas::providers::antigravity::AntigravityProvider::new(auth))
+        }
         ProviderKind::SiliconFlow => Box::new(
             quotas::providers::siliconflow::SiliconFlowProvider::new(auth),
         ),
@@ -1527,7 +1532,7 @@ mod tests {
     #[test]
     fn startup_plan_reports_missing_cache_when_refresh_disabled() {
         let planned = plan_tui_provider_entry(
-            ProviderKind::Gemini,
+            ProviderKind::Antigravity,
             None,
             false,
             false,
@@ -1588,7 +1593,7 @@ mod tests {
         let kinds = vec![
             ProviderKind::Claude,
             ProviderKind::Codex,
-            ProviderKind::Gemini,
+            ProviderKind::Antigravity,
         ];
         let auth_ready = vec![true, true, true];
         let entry_done = vec![true, true, true];
@@ -1617,7 +1622,7 @@ mod tests {
         let kinds = vec![
             ProviderKind::Claude,
             ProviderKind::Codex,
-            ProviderKind::Gemini,
+            ProviderKind::Antigravity,
         ];
         let auth_ready = vec![true, true, false];
         let entry_done = vec![true, true, true];

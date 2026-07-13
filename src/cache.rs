@@ -42,7 +42,7 @@ pub fn read_cache() -> CacheFile {
 fn rehydrate_cached_results(cache: &mut CacheFile) {
     for entry in cache.entries.values_mut() {
         match entry.result.kind {
-            ProviderKind::Gemini => rehydrate_gemini_result(&mut entry.result),
+            ProviderKind::Antigravity => rehydrate_antigravity_result(&mut entry.result),
             // Re-parse so label/window changes (e.g. 168h → 7d) apply to
             // cached entries without waiting for the next live refresh.
             ProviderKind::Codex => rehydrate_codex_result(&mut entry.result),
@@ -51,11 +51,11 @@ fn rehydrate_cached_results(cache: &mut CacheFile) {
     }
 }
 
-fn rehydrate_gemini_result(result: &mut ProviderResult) {
+fn rehydrate_antigravity_result(result: &mut ProviderResult) {
     let Some(raw) = &result.raw_response else {
         return;
     };
-    let Ok(quota) = crate::providers::gemini::parse_quota(raw) else {
+    let Ok(quota) = crate::providers::antigravity::parse_quota(raw) else {
         return;
     };
     result.status = ProviderStatus::Available { quota };
@@ -164,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn read_cache_rehydrates_gemini_fraction_only_raw_response() {
+    fn read_cache_rehydrates_antigravity_summary_raw_response() {
         let _guard = ENV_LOCK.lock().unwrap();
         let previous_xdg = std::env::var_os("XDG_CACHE_HOME");
         let cache_root =
@@ -174,7 +174,7 @@ mod tests {
 
         let cached_at = Utc::now();
         let result = ProviderResult {
-            kind: ProviderKind::Gemini,
+            kind: ProviderKind::Antigravity,
             status: ProviderStatus::Unavailable {
                 info: crate::providers::UnavailableInfo {
                     reason: "stale".into(),
@@ -183,21 +183,29 @@ mod tests {
             },
             fetched_at: cached_at,
             raw_response: Some(serde_json::json!({
-                "buckets": [
-                    {
-                        "remainingFraction": 0.96,
-                        "resetTime": "2026-04-18T04:00:00Z",
-                        "modelId": "gemini-2.5-flash",
-                        "tokenType": "REQUESTS"
-                    }
-                ]
+                "groups": [{
+                    "displayName": "Gemini Models",
+                    "buckets": [{
+                        "bucketId": "gemini-weekly",
+                        "displayName": "Weekly Limit",
+                        "window": "weekly",
+                        "resetTime": "2026-07-19T17:07:49Z",
+                        "remainingFraction": 0.82
+                    }, {
+                        "bucketId": "gemini-5h",
+                        "displayName": "Five Hour Limit",
+                        "window": "5h",
+                        "resetTime": "2026-07-13T18:32:16Z",
+                        "remainingFraction": 0.98
+                    }]
+                }]
             })),
             auth_source: None,
             cached_at: None,
         };
         let mut file = CacheFile::default();
         file.entries
-            .insert("gemini".into(), CacheEntry { result, cached_at });
+            .insert("antigravity".into(), CacheEntry { result, cached_at });
         std::fs::write(
             cache_dir.join("cache.json"),
             serde_json::to_string(&file).unwrap(),
@@ -213,13 +221,16 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(cache_root);
 
-        let gemini = cache.entries.get("gemini").unwrap();
-        let ProviderStatus::Available { quota } = &gemini.result.status else {
-            panic!("expected available Gemini quota");
+        let entry = cache.entries.get("antigravity").unwrap();
+        let ProviderStatus::Available { quota } = &entry.result.status else {
+            panic!("expected available Antigravity quota");
         };
-        assert_eq!(quota.windows[0].limit, 100);
-        assert_eq!(quota.windows[0].remaining, 96);
-        assert_eq!(quota.windows[0].used, 4);
+        assert_eq!(quota.plan_name, "Antigravity");
+        assert_eq!(quota.windows.len(), 2);
+        let weekly = quota.windows.iter().find(|w| w.window_type == "7d/gemini").unwrap();
+        assert_eq!(weekly.limit, 100);
+        assert_eq!(weekly.remaining, 82);
+        assert_eq!(weekly.used, 18);
     }
 
     #[test]
