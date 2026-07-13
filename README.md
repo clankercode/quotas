@@ -119,4 +119,5 @@ Each provider result reports one of:
 
 ## License
 
-Dual-licensed under The Unlicense OR CC0-1.0.
+Dual-licensed under [The Unlicense](LICENSE-UNLICENSE) **OR** [CC0-1.0](LICENSE-CC0).
+You may use either (or both) at your option.
