@@ -1,0 +1,26 @@
+{
+  "available_count": 2,
+  "total_earned_count": 0,
+  "credits": [
+    {
+      "id": "REDACTED_040ee846",
+      "reset_type": "codex_rate_limits",
+      "status": "available",
+      "granted_at": "2026-06-26T23:51:27.649554Z",
+      "expires_at": "2026-07-26T23:51:27.649554Z",
+      "title": "Full reset",
+      "description": "Thanks for using Codex! You've been granted one free rate limit reset.",
+      "profile_user_id": "Codex Team"
+    },
+    {
+      "id": "REDACTED_c16dd14a",
+      "reset_type": "codex_rate_limits",
+      "status": "available",
+      "granted_at": "2026-07-01T19:09:54.102131Z",
+      "expires_at": "2026-07-31T19:09:54.102131Z",
+      "title": "Full reset",
+      "description": "Thanks for using Codex! You've been granted one free rate limit reset.",
+      "profile_user_id": "Codex Team"
+    }
+  ]
+}

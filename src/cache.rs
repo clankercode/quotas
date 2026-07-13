@@ -65,7 +65,33 @@ fn rehydrate_codex_result(result: &mut ProviderResult) {
     let Some(raw) = &result.raw_response else {
         return;
     };
-    let quota = crate::providers::codex::parse_usage(raw);
+    // Multi-part envelopes put usage under "usage"; flat bodies are legacy.
+    let usage = crate::providers::codex::usage_body_from_raw(raw);
+    let mut quota = crate::providers::codex::parse_usage(usage);
+    // Prefer per-credit rows from the stored detail endpoint body when present.
+    if let Some(detail_body) = raw.get("rate_limit_reset_credits") {
+        if let Some(detail) =
+            crate::providers::codex::parse_banked_reset_credits_detail(detail_body)
+        {
+            crate::providers::codex::merge_banked_reset_detail(&mut quota, detail);
+        }
+    }
+    // Flat usage-only cache: usage raw only has banked count; preserve
+    // per-credit detail from the previous status when re-parse would wipe
+    // it — but only while the count still matches (spent credits must not
+    // reappear).
+    if let ProviderStatus::Available { quota: old } = &result.status {
+        if let (Some(new_br), Some(old_br)) = (&mut quota.banked_resets, &old.banked_resets) {
+            if new_br.available_count <= 0 {
+                new_br.credits.clear();
+            } else if new_br.credits.is_empty()
+                && !old_br.credits.is_empty()
+                && new_br.available_count == old_br.available_count
+            {
+                new_br.credits = old_br.credits.clone();
+            }
+        }
+    }
     result.status = ProviderStatus::Available { quota };
 }
 
@@ -146,6 +172,7 @@ mod tests {
                 plan_name: "test".into(),
                 windows: vec![],
                 unlimited: false,
+                banked_resets: None,
             },
         });
         let unavail = status_priority(&ProviderStatus::Unavailable {
@@ -261,6 +288,7 @@ mod tests {
                         period_seconds: Some(604800),
                     }],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: cached_at,
@@ -305,4 +333,164 @@ mod tests {
         assert_eq!(quota.windows[0].window_type, "7d");
         assert_eq!(quota.windows[0].used, 76);
     }
+    #[test]
+    fn rehydrate_preserves_codex_banked_credit_details_when_count_matches() {
+        use crate::providers::{BankedResetCredit, BankedResets, ProviderKind, ProviderStatus};
+
+        let usage = serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 10,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1784487518i64
+                },
+                "secondary_window": null
+            },
+            "credits": { "balance": "0", "unlimited": false },
+            "rate_limit_reset_credits": { "available_count": 2 }
+        });
+        let mut result = ProviderResult {
+            kind: ProviderKind::Codex,
+            status: ProviderStatus::Available {
+                quota: crate::providers::ProviderQuota {
+                    plan_name: "stale".into(),
+                    windows: vec![],
+                    unlimited: false,
+                    banked_resets: Some(BankedResets {
+                        available_count: 2,
+                        credits: vec![BankedResetCredit {
+                            id: "c1".into(),
+                            status: "available".into(),
+                            title: Some("Full reset".into()),
+                            description: None,
+                            granted_at: None,
+                            expires_at: None,
+                            source: None,
+                        }],
+                    }),
+                },
+            },
+            fetched_at: Utc::now(),
+            raw_response: Some(usage),
+            auth_source: None,
+            cached_at: None,
+        };
+        rehydrate_codex_result(&mut result);
+        let ProviderStatus::Available { quota } = &result.status else {
+            panic!("expected available");
+        };
+        let br = quota.banked_resets.as_ref().expect("banked");
+        assert_eq!(br.available_count, 2);
+        assert_eq!(br.credits.len(), 1);
+        assert_eq!(br.credits[0].title.as_deref(), Some("Full reset"));
+    }
+
+    #[test]
+    fn rehydrate_drops_banked_credits_when_count_is_zero() {
+        use crate::providers::{BankedResetCredit, BankedResets, ProviderKind, ProviderStatus};
+
+        let usage = serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 0,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1784487518i64
+                }
+            },
+            "credits": { "balance": "0", "unlimited": false },
+            "rate_limit_reset_credits": { "available_count": 0 }
+        });
+        let mut result = ProviderResult {
+            kind: ProviderKind::Codex,
+            status: ProviderStatus::Available {
+                quota: crate::providers::ProviderQuota {
+                    plan_name: "stale".into(),
+                    windows: vec![],
+                    unlimited: false,
+                    banked_resets: Some(BankedResets {
+                        available_count: 2,
+                        credits: vec![BankedResetCredit {
+                            id: "c1".into(),
+                            status: "available".into(),
+                            title: Some("Full reset".into()),
+                            description: None,
+                            granted_at: None,
+                            expires_at: None,
+                            source: None,
+                        }],
+                    }),
+                },
+            },
+            fetched_at: Utc::now(),
+            raw_response: Some(usage),
+            auth_source: None,
+            cached_at: None,
+        };
+        rehydrate_codex_result(&mut result);
+        let ProviderStatus::Available { quota } = &result.status else {
+            panic!("expected available");
+        };
+        let br = quota.banked_resets.as_ref().expect("banked field present with 0");
+        assert_eq!(br.available_count, 0);
+        assert!(br.credits.is_empty(), "spent credits must not reappear");
+    }
+
+    #[test]
+    fn rehydrate_reads_banked_detail_from_multipart_raw_envelope() {
+        use crate::providers::{ProviderKind, ProviderStatus};
+
+        let envelope = serde_json::json!({
+            "usage": {
+                "plan_type": "pro",
+                "rate_limit": {
+                    "primary_window": {
+                        "used_percent": 10,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1784487518i64
+                    },
+                    "secondary_window": null
+                },
+                "credits": { "balance": "0", "unlimited": false },
+                "rate_limit_reset_credits": { "available_count": 1 }
+            },
+            "rate_limit_reset_credits": {
+                "available_count": 1,
+                "credits": [{
+                    "id": "from-raw",
+                    "status": "available",
+                    "title": "Full reset",
+                    "profile_user_id": "Codex Team"
+                }]
+            }
+        });
+        let mut result = ProviderResult {
+            kind: ProviderKind::Codex,
+            status: ProviderStatus::Available {
+                quota: crate::providers::ProviderQuota {
+                    plan_name: "stale".into(),
+                    windows: vec![],
+                    unlimited: false,
+                    banked_resets: None,
+                },
+            },
+            fetched_at: Utc::now(),
+            raw_response: Some(envelope),
+            auth_source: None,
+            cached_at: None,
+        };
+        rehydrate_codex_result(&mut result);
+        let ProviderStatus::Available { quota } = &result.status else {
+            panic!("expected available");
+        };
+        assert_eq!(quota.windows[0].window_type, "7d");
+        let br = quota.banked_resets.as_ref().expect("banked");
+        assert_eq!(br.available_count, 1);
+        assert_eq!(br.credits.len(), 1);
+        assert_eq!(br.credits[0].id, "from-raw");
+        assert_eq!(br.credits[0].title.as_deref(), Some("Full reset"));
+        assert_eq!(br.credits[0].source.as_deref(), Some("Codex Team"));
+    }
+
 }

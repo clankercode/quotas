@@ -136,6 +136,7 @@ pub(crate) fn parse_credits(
         plan_name,
         windows,
         unlimited: is_free && total_units == 0,
+        banked_resets: None,
     })
 }
 

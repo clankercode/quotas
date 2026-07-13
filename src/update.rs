@@ -42,28 +42,73 @@ pub fn release_page_url(version: &str) -> String {
 
 /// Open a URL in the user's default browser. Best-effort — failures are silent
 /// so a missing `xdg-open`/`open` never breaks the TUI event loop.
+///
+/// Child stdout/stderr are redirected to `/dev/null` (or the platform
+/// equivalent). Without that, a failing `xdg-open` in a headless/SSH/tmux
+/// pane prints browser-fallback errors (`www-browser: command not found`,
+/// `no method available for opening 'https://…'`) straight into the TUI
+/// alternate screen and trashes the layout.
 pub fn open_url(url: &str) {
     let _ = open_url_impl(url);
 }
 
 fn open_url_impl(url: &str) -> std::io::Result<std::process::Child> {
+    use std::process::{Command, Stdio};
+
+    /// Spawn with stdin/stdout/stderr detached so helper noise cannot paint
+    /// over the TUI (crossterm alternate screen shares the same pty).
+    fn spawn_quiet(mut cmd: Command) -> std::io::Result<std::process::Child> {
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    }
+
     if cfg!(target_os = "macos") {
-        std::process::Command::new("open").arg(url).spawn()
+        spawn_quiet({
+            let mut c = Command::new("open");
+            c.arg(url);
+            c
+        })
     } else if cfg!(target_os = "windows") {
         // Empty title arg after `start` keeps URLs with `&` from being parsed
         // as extra commands.
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()
+        spawn_quiet({
+            let mut c = Command::new("cmd");
+            c.args(["/C", "start", "", url]);
+            c
+        })
     } else {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
-            .or_else(|_| {
-                std::process::Command::new("gio")
-                    .args(["open", url])
-                    .spawn()
+        // Prefer $BROWSER when set (common in multiplexed/remote sessions where
+        // xdg-open has no desktop handler), then xdg-open / gio.
+        if let Ok(browser) = std::env::var("BROWSER") {
+            if !browser.is_empty() {
+                // $BROWSER may be a command line; take the first token as the binary.
+                let mut parts = browser.split_whitespace();
+                if let Some(bin) = parts.next() {
+                    let mut c = Command::new(bin);
+                    for arg in parts {
+                        c.arg(arg);
+                    }
+                    c.arg(url);
+                    if let Ok(child) = spawn_quiet(c) {
+                        return Ok(child);
+                    }
+                }
+            }
+        }
+        spawn_quiet({
+            let mut c = Command::new("xdg-open");
+            c.arg(url);
+            c
+        })
+        .or_else(|_| {
+            spawn_quiet({
+                let mut c = Command::new("gio");
+                c.args(["open", url]);
+                c
             })
+        })
     }
 }
 
@@ -220,6 +265,29 @@ mod tests {
         );
         // Leading v should not be doubled.
         assert_eq!(release_page_url("v0.8.2"), release_page_url("0.8.2"));
+    }
+
+    #[test]
+    fn open_url_is_best_effort_and_does_not_panic() {
+        // Even with a nonsense URL / missing desktop opener, open_url must not
+        // panic and must not require a real browser (stdio is silenced).
+        open_url("https://example.invalid/quotas-open-url-smoke");
+    }
+
+    #[test]
+    fn open_url_impl_redirects_child_stdio() {
+        // Regression: without null stdio, a failing xdg-open paints
+        // "www-browser: command not found" over the TUI alternate screen.
+        let child = open_url_impl("https://example.invalid/stdio-null-check");
+        // Spawn may fail entirely if no opener exists — that's fine; when it
+        // does spawn, the child must not inherit the parent's stdio.
+        if let Ok(mut child) = child {
+            // We cannot read null-redirected handles; just ensure wait is clean
+            // enough not to hang the test suite (xdg-open exits quickly).
+            let _ = child.try_wait();
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     #[test]

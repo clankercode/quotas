@@ -1,5 +1,5 @@
 use crate::config::QuotaPreferences;
-use crate::providers::{ProviderResult, ProviderStatus, QuotaWindow};
+use crate::providers::{BankedResets, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::tui::bar;
 use crate::tui::freshness::FreshnessLabel;
 use chrono::Utc;
@@ -165,6 +165,7 @@ impl DetailView {
                         ));
                     }
                 }
+
             }
             ProviderStatus::Unavailable { info } => {
                 lines.push(Line::from(""));
@@ -208,23 +209,104 @@ impl DetailView {
             }
         }
 
-        // Raw JSON section at bottom
-        if let Some(raw) = &self.result.raw_response {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::raw("── raw response ──").dim(),
-            ]));
-            let pretty = serde_json::to_string_pretty(raw).unwrap_or_default();
-            for raw_line in pretty.lines() {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::raw(raw_line.to_string()).dim(),
-                ]));
+        // Banked resets sit below window rows (and still render when windows
+        // are empty / unlimited), but only while any remain available.
+        if let ProviderStatus::Available { quota } = &self.result.status {
+            if let Some(banked) = &quota.banked_resets {
+                if banked.available_count > 0 {
+                    render_banked_resets_section(&mut lines, banked);
+                }
             }
         }
 
+        // Raw JSON section at bottom. Multi-endpoint providers (Codex with
+        // banked-reset detail, Cursor plan+usage, Grok, OpenRouter, …) store
+        // an envelope of objects; render main first, then each extra part.
+        if let Some(raw) = &self.result.raw_response {
+            render_raw_response_section(&mut lines, raw);
+        }
+
         Text::from(lines)
+    }
+}
+
+/// True when `raw` looks like a multi-endpoint envelope: two or more top-level
+/// keys whose values are only objects, arrays, or null (not mixed scalars like
+/// a real single API body with `plan_type: "pro"`).
+fn is_multipart_raw_envelope(raw: &serde_json::Value) -> bool {
+    let Some(obj) = raw.as_object() else {
+        return false;
+    };
+    if obj.len() < 2 {
+        return false;
+    }
+    obj.values()
+        .all(|v| v.is_object() || v.is_array() || v.is_null())
+}
+
+/// Preferred order for primary parts of multi-endpoint raw envelopes.
+/// serde_json `Map` may iterate alphabetically; we always put known main
+/// payloads first so extras (e.g. Codex `rate_limit_reset_credits`) follow.
+const RAW_PRIMARY_KEYS: &[&str] = &[
+    "usage",      // Codex (main wham/usage)
+    "plan",       // Cursor plan info (before usage)
+    "default",    // Grok CLI /v1/billing
+    "key",        // OpenRouter key endpoint
+    "validation", // Grok management key validation
+    "balance",    // Grok management prepaid balance
+];
+
+/// Parts in display order: known primary keys first (in `RAW_PRIMARY_KEYS`
+/// order), then any remaining keys sorted for stable output.
+fn multipart_parts_display_order(
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<(&str, &serde_json::Value)> {
+    let mut out = Vec::with_capacity(obj.len());
+    let mut seen = std::collections::HashSet::new();
+    for key in RAW_PRIMARY_KEYS {
+        if let Some(v) = obj.get(*key) {
+            out.push((*key, v));
+            seen.insert(*key);
+        }
+    }
+    let mut rest: Vec<_> = obj
+        .iter()
+        .filter(|(k, _)| !seen.contains(k.as_str()))
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+    rest.sort_by(|a, b| a.0.cmp(b.0));
+    out.extend(rest);
+    out
+}
+
+fn push_pretty_json_lines(lines: &mut Vec<Line<'_>>, value: &serde_json::Value) {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_default();
+    for raw_line in pretty.lines() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(raw_line.to_string()).dim(),
+        ]));
+    }
+}
+
+fn render_raw_response_section(lines: &mut Vec<Line<'_>>, raw: &serde_json::Value) {
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::raw("── raw response ──").dim(),
+    ]));
+    if is_multipart_raw_envelope(raw) {
+        let obj = raw.as_object().expect("checked above");
+        for (key, part) in multipart_parts_display_order(obj) {
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::raw(format!("── {key} ──")).dim(),
+            ]));
+            push_pretty_json_lines(lines, part);
+        }
+    } else {
+        push_pretty_json_lines(lines, raw);
     }
 }
 
@@ -459,6 +541,70 @@ fn render_hidden_row(window: &QuotaWindow, focused: bool) -> Line<'static> {
     ])
 }
 
+/// Banked / earned rate-limit reset credits (Codex): count + per-credit detail.
+fn render_banked_resets_section(lines: &mut Vec<Line<'_>>, banked: &BankedResets) {
+    lines.push(Line::from(""));
+    let n = banked.available_count;
+    let header = if n == 1 {
+        "── banked resets (1 available) ──".to_string()
+    } else {
+        format!("── banked resets ({n} available) ──")
+    };
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::raw(header).cyan().dim(),
+    ]));
+
+    if banked.credits.is_empty() {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw("Redeemable full usage resets (no per-credit detail).").dim(),
+        ]));
+        return;
+    }
+
+    let now = Utc::now();
+    for credit in &banked.credits {
+        let title = credit
+            .title
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Reset");
+        let mut main = title.to_string();
+        if let Some(exp) = credit.expires_at {
+            let secs = (exp - now).num_seconds();
+            let exp_label = if secs <= 0 {
+                "expired".to_string()
+            } else if secs < 3600 {
+                format!("expires in {}m", (secs + 59) / 60)
+            } else if secs < 86400 {
+                format!("expires in {}h", (secs + 3599) / 3600)
+            } else {
+                format!("expires in {}d", (secs + 86399) / 86400)
+            };
+            main.push_str(" · ");
+            main.push_str(&exp_label);
+        }
+        if let Some(src) = credit.source.as_deref().filter(|s| !s.is_empty()) {
+            main.push_str(" · ");
+            main.push_str(src);
+        }
+        let status = credit.status.to_ascii_lowercase();
+        let title_span = if status == "available" {
+            Span::raw(main).cyan()
+        } else {
+            Span::raw(format!("{main} [{status}]")).dim()
+        };
+        lines.push(Line::from(vec![Span::raw("  "), title_span]));
+        if let Some(desc) = credit.description.as_deref().filter(|s| !s.is_empty()) {
+            lines.push(Line::from(vec![
+                Span::raw("    "),
+                Span::raw(desc.to_string()).dim(),
+            ]));
+        }
+    }
+}
+
 fn partition_windows<'a>(
     windows: &'a [QuotaWindow],
     preferences: &QuotaPreferences,
@@ -622,7 +768,9 @@ fn humanize_duration(d: chrono::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::{ProviderKind, ProviderQuota, QuotaWindow};
+    use crate::providers::{
+        BankedResetCredit, BankedResets, ProviderKind, ProviderQuota, QuotaWindow,
+    };
 
     fn render_detail_text(result: ProviderResult, width: u16, height: u16) -> String {
         use ratatui::backend::TestBackend;
@@ -691,6 +839,7 @@ mod tests {
                         },
                     ],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),
@@ -747,6 +896,7 @@ mod tests {
                         period_seconds: Some(31 * 24 * 3600),
                     }],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),
@@ -781,6 +931,7 @@ mod tests {
                         period_seconds: None,
                     }],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),
@@ -793,6 +944,142 @@ mod tests {
         assert!(out.contains("250 left"), "out:\n{out}");
         assert!(out.contains("300 cap"), "out:\n{out}");
         assert!(!out.contains('$'), "out:\n{out}");
+    }
+
+    fn codex_with_banked_resets() -> ProviderResult {
+        ProviderResult {
+            kind: ProviderKind::Codex,
+            status: ProviderStatus::Available {
+                quota: ProviderQuota {
+                    plan_name: "Codex / ChatGPT pro".into(),
+                    windows: vec![QuotaWindow {
+                        window_type: "7d".into(),
+                        used: 100,
+                        limit: 100,
+                        remaining: 0,
+                        reset_at: Some(
+                            chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:00Z")
+                                .unwrap()
+                                .with_timezone(&chrono::Utc),
+                        ),
+                        period_seconds: Some(604800),
+                    }],
+                    unlimited: false,
+                    banked_resets: Some(BankedResets {
+                        available_count: 2,
+                        credits: vec![
+                            BankedResetCredit {
+                                id: "c1".into(),
+                                status: "available".into(),
+                                title: Some("Full reset".into()),
+                                description: Some(
+                                    "You've been granted one free rate limit reset.".into(),
+                                ),
+                                granted_at: None,
+                                expires_at: Some(
+                                    chrono::DateTime::parse_from_rfc3339("2026-07-26T23:51:27Z")
+                                        .unwrap()
+                                        .with_timezone(&chrono::Utc),
+                                ),
+                                source: Some("Codex Team".into()),
+                            },
+                            BankedResetCredit {
+                                id: "c2".into(),
+                                status: "available".into(),
+                                title: Some("Full reset".into()),
+                                description: None,
+                                granted_at: None,
+                                expires_at: Some(
+                                    chrono::DateTime::parse_from_rfc3339("2026-07-31T19:09:54Z")
+                                        .unwrap()
+                                        .with_timezone(&chrono::Utc),
+                                ),
+                                source: None,
+                            },
+                        ],
+                    }),
+                },
+            },
+            fetched_at: chrono::Utc::now(),
+            raw_response: None,
+            auth_source: Some("oauth:~/.codex/auth.json".into()),
+            cached_at: None,
+        }
+    }
+
+    #[test]
+    fn renders_banked_resets_section_with_expiry() {
+        let out = render_detail_text(codex_with_banked_resets(), 100, 28);
+        assert!(
+            out.contains("banked resets") && out.contains("2 available"),
+            "section header: {out}"
+        );
+        assert!(out.contains("Full reset"), "credit title: {out}");
+        assert!(
+            out.contains("expires in") || out.contains("expired"),
+            "expiry label: {out}"
+        );
+        assert!(out.contains("Codex Team"), "source: {out}");
+        assert!(
+            out.contains("free rate limit reset"),
+            "description: {out}"
+        );
+    }
+
+    #[test]
+    fn renders_multipart_raw_with_extra_after_main() {
+        let mut result = codex_with_banked_resets();
+        result.raw_response = Some(serde_json::json!({
+            "usage": {
+                "plan_type": "pro",
+                "rate_limit_reset_credits": { "available_count": 2 }
+            },
+            "rate_limit_reset_credits": {
+                "available_count": 2,
+                "credits": [{
+                    "id": "c1",
+                    "status": "available",
+                    "title": "Full reset"
+                }]
+            }
+        }));
+        // Tall enough that the raw section is visible in the buffer.
+        let out = render_detail_text(result, 100, 80);
+        assert!(out.contains("raw response"), "header: {out}");
+        assert!(out.contains("── usage ──"), "main part header: {out}");
+        assert!(
+            out.contains("── rate_limit_reset_credits ──"),
+            "extra part header: {out}"
+        );
+        let usage_pos = out.find("── usage ──").expect("usage");
+        let extra_pos = out
+            .find("── rate_limit_reset_credits ──")
+            .expect("extra");
+        assert!(
+            usage_pos < extra_pos,
+            "extra must render after main usage; out:\n{out}"
+        );
+        assert!(
+            out.contains("\"title\": \"Full reset\"") || out.contains("Full reset"),
+            "extra body content: {out}"
+        );
+    }
+
+    #[test]
+    fn renders_flat_raw_without_multipart_headers() {
+        let mut result = codex_with_banked_resets();
+        result.raw_response = Some(serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit": { "primary_window": { "used_percent": 10 } }
+        }));
+        let out = render_detail_text(result, 100, 80);
+        assert!(out.contains("raw response"), "header: {out}");
+        assert!(out.contains("\"plan_type\": \"pro\""), "flat body: {out}");
+        // Single-endpoint body is not an envelope — no per-key subheaders.
+        assert!(
+            !out.contains("── plan_type ──"),
+            "must not multipart-split scalar mixed body: {out}"
+        );
     }
 
     #[test]
@@ -873,6 +1160,7 @@ mod tests {
                         },
                     ],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),

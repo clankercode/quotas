@@ -2,7 +2,7 @@ use crate::auth::AuthResolver;
 use crate::providers::{ProviderKind, ProviderQuota, ProviderResult, ProviderStatus, QuotaWindow};
 use crate::Result;
 use async_trait::async_trait;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use reqwest::Client;
 
 pub struct CodexProvider {
@@ -18,18 +18,22 @@ impl CodexProvider {
         }
     }
 
-    async fn fetch(&self, token: &str, use_oauth: bool) -> Result<ProviderResult> {
-        let url = "https://chatgpt.com/backend-api/wham/usage";
-        let auth_header = if use_oauth {
+    fn auth_header(token: &str, use_oauth: bool) -> String {
+        if use_oauth {
             format!("Bearer {}", token)
         } else {
             token.to_string()
-        };
+        }
+    }
+
+    async fn fetch(&self, token: &str, use_oauth: bool) -> Result<ProviderResult> {
+        let url = "https://chatgpt.com/backend-api/wham/usage";
+        let auth_header = Self::auth_header(token, use_oauth);
 
         let resp = self
             .http
             .get(url)
-            .header("Authorization", auth_header)
+            .header("Authorization", &auth_header)
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .send()
@@ -39,12 +43,38 @@ impl CodexProvider {
         let body: serde_json::Value = resp.json().await?;
 
         if status.as_u16() == 200 {
-            let quota = parse_usage(&body);
+            let mut quota = parse_usage(&body);
+            // Enrich with per-credit title/expiry when any banked resets exist.
+            // Best-effort: keep the usage summary count if detail fails or is sparse.
+            // Always retain the detail body in raw_response when we got one so the
+            // detail view's raw section can show it after the main usage payload.
+            let mut detail_raw: Option<serde_json::Value> = None;
+            if quota
+                .banked_resets
+                .as_ref()
+                .is_some_and(|b| b.available_count > 0)
+            {
+                if let Ok(Some(detail_body)) =
+                    self.fetch_reset_credits_detail(&auth_header).await
+                {
+                    if let Some(detail) = parse_banked_reset_credits_detail(&detail_body) {
+                        merge_banked_reset_detail(&mut quota, detail);
+                    }
+                    detail_raw = Some(detail_body);
+                }
+            }
+            let raw_response = Some(match detail_raw {
+                Some(detail) => serde_json::json!({
+                    "usage": body,
+                    "rate_limit_reset_credits": detail,
+                }),
+                None => body,
+            });
             return Ok(ProviderResult {
                 kind: ProviderKind::Codex,
                 status: ProviderStatus::Available { quota },
                 fetched_at: Utc::now(),
-                raw_response: Some(body),
+                raw_response,
                 auth_source: None,
                 cached_at: None,
             });
@@ -70,6 +100,40 @@ impl CodexProvider {
             cached_at: None,
         })
     }
+
+    /// Fetch the banked-reset detail payload. Returns the raw JSON body on
+    /// success so callers can both parse structured credits and retain the
+    /// body for the detail view's multi-part raw section.
+    async fn fetch_reset_credits_detail(
+        &self,
+        auth_header: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        let url = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+        let resp = self
+            .http
+            .get(url)
+            .header("Authorization", auth_header)
+            .header("Accept", "application/json")
+            .header("originator", "Codex Desktop")
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(Some(body))
+    }
+}
+
+/// Extract the usage payload from a Codex `raw_response`.
+///
+/// New fetches that also retrieved banked-reset detail store a multi-part
+/// envelope `{ "usage": …, "rate_limit_reset_credits": … }`. Older cache
+/// entries (and fetches without detail) keep the flat usage body.
+pub(crate) fn usage_body_from_raw(raw: &serde_json::Value) -> &serde_json::Value {
+    raw.get("usage")
+        .filter(|u| u.is_object())
+        .unwrap_or(raw)
 }
 
 /// Format a Codex rate-limit window duration for display keys.
@@ -240,6 +304,113 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         plan_name: format!("Codex / ChatGPT {}", plan_type),
         windows,
         unlimited,
+        banked_resets: parse_banked_resets_summary(body),
+    }
+}
+
+/// Summary from `wham/usage` (`rate_limit_reset_credits.available_count` only).
+fn parse_banked_resets_summary(body: &serde_json::Value) -> Option<crate::providers::BankedResets> {
+    let summary = body.get("rate_limit_reset_credits")?;
+    let available_count = summary.get("available_count")?.as_i64()?;
+    // Always attach when the field is present so a 0-count can clear UI state
+    // after the last credit is spent (optional: hide 0 in the TUI).
+    Some(crate::providers::BankedResets {
+        available_count,
+        credits: Vec::new(),
+    })
+}
+
+/// Full list from `GET …/wham/rate-limit-reset-credits`.
+///
+/// Returns `None` for empty/unusable payloads so callers keep the usage-summary
+/// count instead of clobbering it with zeros.
+pub(crate) fn parse_banked_reset_credits_detail(
+    body: &serde_json::Value,
+) -> Option<crate::providers::BankedResets> {
+    let count_field = body.get("available_count").and_then(|v| v.as_i64());
+    let mut credits = Vec::new();
+    if let Some(arr) = body.get("credits").and_then(|v| v.as_array()) {
+        for c in arr {
+            let id = c
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() {
+                continue;
+            }
+            let status = c
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let parse_ts = |key: &str| {
+                c.get(key)
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&Utc))
+            };
+            credits.push(crate::providers::BankedResetCredit {
+                id,
+                status,
+                title: c
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                description: c
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                granted_at: parse_ts("granted_at"),
+                expires_at: parse_ts("expires_at"),
+                source: c
+                    .get("profile_user_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            });
+        }
+    }
+    // Require a real signal — bare `{}` must not wipe the usage summary.
+    if count_field.is_none() && credits.is_empty() {
+        return None;
+    }
+    Some(crate::providers::BankedResets {
+        available_count: count_field.unwrap_or(credits.len() as i64),
+        credits,
+    })
+}
+
+/// Merge detail endpoint into usage-derived banked resets.
+/// Usage `available_count` stays authoritative when detail omits/zeros it
+/// without providing credit rows.
+pub(crate) fn merge_banked_reset_detail(
+    quota: &mut ProviderQuota,
+    detail: crate::providers::BankedResets,
+) {
+    let detail_count = detail.available_count;
+    let detail_credits = detail.credits;
+
+    let Some(br) = quota.banked_resets.as_mut() else {
+        if detail_count > 0 || !detail_credits.is_empty() {
+            quota.banked_resets = Some(crate::providers::BankedResets {
+                available_count: if detail_count > 0 {
+                    detail_count
+                } else {
+                    detail_credits.len() as i64
+                },
+                credits: detail_credits,
+            });
+        }
+        return;
+    };
+
+    if !detail_credits.is_empty() {
+        br.credits = detail_credits;
+    }
+    // Non-zero detail count is authoritative; never zero a good usage summary
+    // just because the detail payload was sparse.
+    if detail_count > 0 {
+        br.available_count = detail_count;
     }
 }
 
@@ -369,6 +540,103 @@ mod tests {
         assert_eq!(spark.used, 0);
         assert_eq!(spark.limit, 100);
         assert_eq!(spark.period_seconds, Some(604800));
+
+        // Summary-only banked resets from usage payload.
+        let banked = quota.banked_resets.expect("rate_limit_reset_credits on live");
+        assert_eq!(banked.available_count, 2);
+        assert!(
+            banked.credits.is_empty(),
+            "usage payload has count only; detail is a separate endpoint"
+        );
+    }
+
+    #[test]
+    fn parses_live_rate_limit_reset_credits_detail() {
+        let body = fixture("rate_limit_reset_credits_live.json");
+        let banked = parse_banked_reset_credits_detail(&body).expect("detail");
+        assert_eq!(banked.available_count, 2);
+        assert_eq!(banked.credits.len(), 2);
+        assert_eq!(banked.credits[0].status, "available");
+        assert_eq!(banked.credits[0].title.as_deref(), Some("Full reset"));
+        assert!(banked.credits[0].expires_at.is_some());
+        assert_eq!(
+            banked.credits[0].source.as_deref(),
+            Some("Codex Team")
+        );
+        assert!(banked.credits[0]
+            .description
+            .as_deref()
+            .unwrap_or("")
+            .contains("rate limit reset"));
+    }
+
+    #[test]
+    fn parse_usage_omits_banked_when_field_missing() {
+        let body = serde_json::json!({
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 1,
+                    "limit_window_seconds": 18000,
+                    "reset_at": 1744502400i64
+                }
+            },
+            "credits": { "balance": "0", "unlimited": false }
+        });
+        let quota = parse_usage(&body);
+        assert!(quota.banked_resets.is_none());
+    }
+
+    #[test]
+    fn sparse_detail_payload_does_not_parse() {
+        assert!(parse_banked_reset_credits_detail(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn usage_body_from_raw_unwraps_multipart_envelope() {
+        let usage = serde_json::json!({
+            "plan_type": "pro",
+            "rate_limit_reset_credits": { "available_count": 2 }
+        });
+        let envelope = serde_json::json!({
+            "usage": usage,
+            "rate_limit_reset_credits": { "available_count": 2, "credits": [] }
+        });
+        assert_eq!(usage_body_from_raw(&envelope)["plan_type"], "pro");
+        // Flat legacy body is returned as-is.
+        assert_eq!(usage_body_from_raw(&usage)["plan_type"], "pro");
+    }
+
+    #[test]
+    fn merge_detail_keeps_usage_count_when_detail_count_zero() {
+        let mut quota = ProviderQuota {
+            plan_name: "x".into(),
+            windows: vec![],
+            unlimited: false,
+            banked_resets: Some(crate::providers::BankedResets {
+                available_count: 2,
+                credits: vec![],
+            }),
+        };
+        merge_banked_reset_detail(
+            &mut quota,
+            crate::providers::BankedResets {
+                available_count: 0,
+                credits: vec![crate::providers::BankedResetCredit {
+                    id: "c1".into(),
+                    status: "available".into(),
+                    title: Some("Full reset".into()),
+                    description: None,
+                    granted_at: None,
+                    expires_at: None,
+                    source: None,
+                }],
+            },
+        );
+        let br = quota.banked_resets.unwrap();
+        assert_eq!(br.available_count, 2, "usage count must stay");
+        assert_eq!(br.credits.len(), 1);
+        assert_eq!(br.credits[0].title.as_deref(), Some("Full reset"));
     }
 
     #[test]

@@ -242,6 +242,7 @@ pub(crate) fn parse_usage(body: &serde_json::Value) -> ProviderQuota {
         plan_name: "Claude (Max/Pro)".to_string(),
         windows,
         unlimited: false,
+        banked_resets: None,
     }
 }
 

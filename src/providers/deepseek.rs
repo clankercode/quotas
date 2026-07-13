@@ -140,6 +140,7 @@ pub(crate) fn parse_balance(body: &serde_json::Value) -> Result<ProviderQuota> {
         plan_name: plan.to_string(),
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 

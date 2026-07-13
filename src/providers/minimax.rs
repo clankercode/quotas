@@ -219,6 +219,7 @@ pub(crate) fn parse_response(body: &serde_json::Value) -> Result<ProviderQuota> 
         plan_name: format!("MiniMax · {}", plan_name),
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 

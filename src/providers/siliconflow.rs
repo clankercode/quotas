@@ -134,6 +134,7 @@ pub(crate) fn parse_info(body: &serde_json::Value) -> Result<ProviderQuota> {
         plan_name,
         windows,
         unlimited: info.status == "unlimited",
+        banked_resets: None,
     })
 }
 

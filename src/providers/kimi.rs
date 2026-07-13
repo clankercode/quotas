@@ -51,6 +51,7 @@ impl KimiProvider {
                             period_seconds: None,
                         }],
                         unlimited: false,
+                        banked_resets: None,
                     },
                 },
                 fetched_at: Utc::now(),
@@ -296,6 +297,7 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
         plan_name: "Kimi Coding Plan".to_string(),
         windows,
         unlimited: false,
+        banked_resets: None,
     }
 }
 

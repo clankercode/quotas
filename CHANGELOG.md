@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Codex banked rate-limit reset credits** surfaced in the TUI. Usage already includes `rate_limit_reset_credits.available_count`; quotas now parses it into `ProviderQuota.banked_resets` and, when the count is > 0, fetches `GET …/wham/rate-limit-reset-credits` for per-credit title/expiry/source. **Card** plan line shows `· N banked reset(s)` when available; **detail** adds a banked-resets section with each credit. Live fixture `tests/fixtures/codex/rate_limit_reset_credits_live.json`. Redeeming a credit is not implemented (display only).
+- **Detail raw section shows multi-endpoint extras after the main payload.** Codex stores `{ usage, rate_limit_reset_credits }` when the banked-credits endpoint is fetched; the TUI renders each envelope part under its own subheader (Cursor/Grok/OpenRouter multi-part raw already used this shape and now gets the same sequential layout). Flat single-endpoint bodies are unchanged.
+- **TUI footer update link no longer paints `xdg-open` errors over the dashboard.** Opening the release URL redirects the helper's stdin/stdout/stderr to null (and prefers `$BROWSER` when set), so a pane without a desktop handler (e.g. multiplexed/SSH sessions) fails silently instead of flooding the alternate screen with `www-browser: command not found` / `no method available for opening 'https://…'`.
+
 ## 0.10.0 - 2026-07-14
 
 - **Gemini provider renamed to Antigravity** and switched to the agy CLI quota summary endpoint. Fetches `POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary`, which returns two model groups (Gemini / Claude+GPT) each with a shared weekly and 5-hour bucket — matching the agy CLI. Window keys are `5h/{group}` and `7d/{group}` so the TUI clusters by period. Config still accepts `gemini` / `agy` as aliases; cache serde accepts `"gemini"`. Live fixtures under `tests/fixtures/antigravity/`. Auth prefers `~/.gemini/antigravity-cli/antigravity-oauth-token` over legacy Gemini CLI oauth.

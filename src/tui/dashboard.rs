@@ -1146,12 +1146,24 @@ impl Dashboard {
 
         lines.push(Line::from(header_spans));
 
-        // Plan / status line
+        // Plan / status line (optional banked-reset count for Codex etc.)
         match &result.status {
             ProviderStatus::Available { quota } => {
-                lines.push(Line::from(
-                    Span::raw(quota.plan_name.clone()).italic().dim(),
-                ));
+                let mut plan_spans = vec![Span::raw(quota.plan_name.clone()).italic().dim()];
+                if let Some(banked) = &quota.banked_resets {
+                    if banked.available_count > 0 {
+                        // Compact badge so narrow multi-column cards still
+                        // show the count next to the plan name.
+                        let n = banked.available_count;
+                        let label = if n == 1 {
+                            " · 1 banked".to_string()
+                        } else {
+                            format!(" · {n} banked")
+                        };
+                        plan_spans.push(Span::raw(label).cyan().dim());
+                    }
+                }
+                lines.push(Line::from(plan_spans));
 
                 let mut visible: Vec<&QuotaWindow> = quota
                     .windows
@@ -1622,6 +1634,7 @@ fn format_num(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::BankedResets;
     use crate::providers::{ProviderKind, ProviderQuota, ProviderStatus};
 
     fn dummy_available_result(kind: ProviderKind) -> ProviderResult {
@@ -1632,6 +1645,7 @@ mod tests {
                     plan_name: "test".into(),
                     windows: vec![],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),
@@ -1709,6 +1723,7 @@ mod tests {
                         },
                     ],
                     unlimited: false,
+                    banked_resets: None,
                 },
             },
             fetched_at: chrono::Utc::now(),
@@ -2090,6 +2105,27 @@ mod tests {
         );
         // Fraction-based utilization (gemini weekly ~18% used).
         assert!(out.contains("18%") || out.contains("82%"), "got: {out}");
+    }
+
+    #[test]
+    fn renders_banked_reset_count_on_codex_card() {
+        let mut result = dummy_available_result(ProviderKind::Codex);
+        if let ProviderStatus::Available { quota } = &mut result.status {
+            quota.plan_name = "Codex / ChatGPT pro".into();
+            quota.banked_resets = Some(BankedResets {
+                available_count: 2,
+                credits: vec![],
+            });
+        }
+        let kinds = vec![ProviderKind::Codex];
+        let entries = vec![ProviderEntry::Done(result)];
+        let dashboard = Dashboard::new_with_entries(kinds, entries);
+        let out = render_text(&dashboard, 80, 20);
+        assert!(
+            out.contains("2 banked"),
+            "expected banked count on plan line, got: {out}"
+        );
+        assert!(out.contains("Codex"), "got: {out}");
     }
 
     #[test]

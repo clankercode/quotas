@@ -555,6 +555,7 @@ pub(crate) fn parse_cli_billing(
         plan_name,
         windows,
         unlimited,
+        banked_resets: None,
     })
 }
 
@@ -651,6 +652,7 @@ pub(crate) fn parse_mgmt_billing(
         plan_name: "xAI API".into(),
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 

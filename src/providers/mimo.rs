@@ -349,6 +349,7 @@ pub(crate) fn parse_platform_usage(body: &serde_json::Value) -> Result<ProviderQ
         plan_name: "MiMo · Token Plan".into(),
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 
@@ -433,6 +434,7 @@ pub(crate) fn parse_balance(body: &serde_json::Value, base: &str) -> Result<Prov
         plan_name: format!("MiMo · {}", plan_label),
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 

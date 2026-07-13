@@ -315,6 +315,7 @@ fn parse_summary_quota(body: &serde_json::Value) -> Result<ProviderQuota> {
         plan_name,
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 
@@ -488,6 +489,7 @@ fn parse_legacy_model_quota(body: &serde_json::Value) -> Result<ProviderQuota> {
         plan_name,
         windows,
         unlimited: false,
+        banked_resets: None,
     })
 }
 

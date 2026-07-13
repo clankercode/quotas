@@ -144,6 +144,7 @@ pub(crate) fn parse_user(body: &serde_json::Value) -> ProviderQuota {
         plan_name,
         windows,
         unlimited,
+        banked_resets: None,
     }
 }
 
