@@ -47,6 +47,45 @@ pub struct GitHubCopilotConfig {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
+pub struct ProfileEntry {
+    /// Provider kind slug (`grok`, `claude`, `codex`). Optional when key is `kind:id`.
+    pub kind: Option<String>,
+    /// Canonical profile directory (e.g. `~/.grok-1`). Authoritative when set.
+    pub canonical: Option<String>,
+    /// Explicit auth file path (overrides `canonical` + default auth filename).
+    pub auth: Option<String>,
+    /// Custom card title.
+    pub name: Option<String>,
+    /// When false, hide this discovered profile.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProfilesConfig {
+    /// Scan `~/.{tool}` and `~/.{tool}-*` for multi-profile tools (default true).
+    pub autodetect: bool,
+    /// Per-profile settings keyed by `kind:profile_id`, path, or bare id.
+    #[serde(default)]
+    pub entries: BTreeMap<String, ProfileEntry>,
+}
+
+impl Default for ProfilesConfig {
+    fn default() -> Self {
+        Self {
+            autodetect: true,
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct Config {
     pub auto_refresh: AutoRefresh,
     pub favorites: FavoritesConfig,
@@ -57,6 +96,7 @@ pub struct Config {
     pub tui: TuiConfig,
     pub ui: Ui,
     pub github_copilot: GitHubCopilotConfig,
+    pub profiles: ProfilesConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -394,5 +434,24 @@ hidden = ["o3/weekly"]
         assert!(decoded.is_provider_favorited("codex"));
         assert!(decoded.is_quota_favorited("codex", "7d"));
         assert!(decoded.is_quota_hidden("codex", "spark/7d"));
+    }
+
+    #[test]
+    fn parses_profile_entries() {
+        let toml_str = r#"
+[profiles]
+autodetect = true
+
+[profiles.entries."grok:grok-1"]
+canonical = "~/.grok-1"
+name = "Grok weekly-exhausted"
+enabled = true
+"#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert!(c.profiles.autodetect);
+        let e = c.profiles.entries.get("grok:grok-1").unwrap();
+        assert_eq!(e.canonical.as_deref(), Some("~/.grok-1"));
+        assert_eq!(e.name.as_deref(), Some("Grok weekly-exhausted"));
+        assert!(e.enabled);
     }
 }

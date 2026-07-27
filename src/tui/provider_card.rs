@@ -17,8 +17,8 @@ impl ProviderCard {
         self.result.kind
     }
 
-    pub fn display_name(&self) -> &'static str {
-        self.result.kind.display_name()
+    pub fn display_name(&self) -> String {
+        self.result.title()
     }
 
     pub fn freshness_label(&self) -> FreshnessLabel {

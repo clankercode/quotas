@@ -479,9 +479,9 @@ fn render_header_line(
     provider_favorite: bool,
 ) -> Line<'static> {
     let provider = if provider_favorite {
-        format!("★ {}", result.kind.display_name())
+        format!("★ {}", result.title())
     } else {
-        result.kind.display_name().to_string()
+        result.title()
     };
     let plan = match &result.status {
         ProviderStatus::Available { quota } => quota.plan_name.clone(),
@@ -848,6 +848,9 @@ mod tests {
                 "oauth:/home/xertrov/.gemini/antigravity-cli/antigravity-oauth-token".into(),
             ),
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -903,6 +906,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         let out = render_detail_text(result, 100, 18);
         assert!(out.contains("$29.31 used"), "out:\n{out}");
@@ -938,6 +944,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         let out = render_detail_text(result, 100, 18);
         assert!(out.contains("50 used"), "out:\n{out}");
@@ -1004,6 +1013,9 @@ mod tests {
             raw_response: None,
             auth_source: Some("oauth:~/.codex/auth.json".into()),
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -1167,6 +1179,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         let prefs = QuotaPreferences {
             favorites: vec!["spark/7d".into()],

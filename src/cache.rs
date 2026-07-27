@@ -111,7 +111,7 @@ pub fn write_cache(results: &[ProviderResult]) {
 
     let mut cache = read_cache();
     for result in results {
-        let key = result.kind.slug().to_string();
+        let key = result.cache_key();
         let should_overwrite = match cache.entries.get(&key) {
             None => true,
             Some(existing) => {
@@ -229,6 +229,9 @@ mod tests {
             })),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         let mut file = CacheFile::default();
         file.entries
@@ -306,6 +309,9 @@ mod tests {
             })),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         let mut file = CacheFile::default();
         file.entries
@@ -375,6 +381,9 @@ mod tests {
             raw_response: Some(usage),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         rehydrate_codex_result(&mut result);
         let ProviderStatus::Available { quota } = &result.status else {
@@ -427,6 +436,9 @@ mod tests {
             raw_response: Some(usage),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         rehydrate_codex_result(&mut result);
         let ProviderStatus::Available { quota } = &result.status else {
@@ -479,6 +491,9 @@ mod tests {
             raw_response: Some(envelope),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         };
         rehydrate_codex_result(&mut result);
         let ProviderStatus::Available { quota } = &result.status else {

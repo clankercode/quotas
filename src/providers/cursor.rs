@@ -68,6 +68,9 @@ impl CursorProvider {
                 })),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -92,6 +95,9 @@ impl CursorProvider {
                 })),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -106,6 +112,9 @@ impl CursorProvider {
             })),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 }
@@ -312,6 +321,9 @@ impl crate::providers::Provider for CursorProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
         }
     }

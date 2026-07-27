@@ -12,6 +12,10 @@ use quotas::auth::env::EnvResolver;
 use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
+use quotas::auth::pi::PiAuthResolver;
+use quotas::auth::profiles::{
+    expand_instances, parse_config_path, ProfileConfigOverlay, ProviderInstance,
+};
 use quotas::auth::refresh;
 use quotas::auth::{AuthResolver, MultiResolver, StaticResolver};
 use quotas::cache;
@@ -19,6 +23,7 @@ use quotas::config::Config;
 use quotas::output::json::JsonOutput;
 use quotas::output::statusline::{self, StatusLineConfig};
 use quotas::providers::{Provider, ProviderKind, ProviderResult};
+use std::collections::BTreeMap;
 use quotas::tui::Dashboard;
 use quotas::tui::DetailMode;
 use quotas::tui::Direction;
@@ -162,42 +167,122 @@ fn opencode_auth(slot: OpencodeSlot) -> Box<dyn AuthResolver> {
     Box::new(OpencodeAuthResolver::new(slot))
 }
 
+fn pi_auth(kind: ProviderKind) -> Box<dyn AuthResolver> {
+    Box::new(PiAuthResolver::new(kind))
+}
+
 fn multi_auth(resolvers: Vec<Box<dyn AuthResolver>>) -> Box<dyn AuthResolver> {
     Box::new(MultiResolver::new(resolvers))
 }
 
-fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthResolver> {
+fn profile_overlays(config: &Config) -> BTreeMap<String, ProfileConfigOverlay> {
+    config
+        .profiles
+        .entries
+        .iter()
+        .map(|(k, e)| {
+            (
+                k.clone(),
+                ProfileConfigOverlay {
+                    name: e.name.clone(),
+                    canonical: e.canonical.as_ref().map(|p| parse_config_path(p)),
+                    auth: e.auth.as_ref().map(|p| parse_config_path(p)),
+                    enabled: e.enabled,
+                },
+            )
+        })
+        .collect()
+}
+
+fn instances_for_kinds(kinds: &[ProviderKind], config: &Config) -> Vec<ProviderInstance> {
+    let home = dirs::home_dir().unwrap_or_default();
+    let overlays = profile_overlays(config);
+    expand_instances(kinds, &home, &overlays, config.profiles.autodetect)
+}
+
+/// Whether shared fallbacks (env / opencode / pi) should attach to this instance.
+/// Multi-profile home-dir cards only use their own auth file to avoid N copies
+/// of the same env key.
+fn allow_shared_fallbacks(instance: &ProviderInstance) -> bool {
+    if instance.auth_path.is_none() {
+        return true;
+    }
+    // Profile-backed instance: only the active default also tries env/pi/opencode.
+    instance.is_active_default || instance.instance_key == instance.kind.slug()
+}
+
+fn build_auth_resolver(instance: &ProviderInstance, config: &Config) -> Box<dyn AuthResolver> {
+    let kind = instance.kind;
+    let shared = allow_shared_fallbacks(instance);
+
     match kind {
-        ProviderKind::Minimax => multi_auth(vec![
-            env_auth(&[("MINIMAX_API_KEY", "minimax")]),
-            key_file_auth(&[".minimax"], "minimax"),
-            opencode_auth(OpencodeSlot::Minimax),
-        ]),
-        ProviderKind::Zai => multi_auth(vec![
-            env_auth(&[("ZHIPU_API_KEY", "zhipu"), ("ZAI_API_KEY", "zai")]),
-            key_file_auth(&[".api-zai"], "zai"),
-            opencode_auth(OpencodeSlot::Zai),
-        ]),
-        ProviderKind::Kimi => multi_auth(vec![
-            env_auth(&[("MOONSHOT_API_KEY", "moonshot"), ("KIMI_API_KEY", "kimi")]),
-            key_file_auth(&[".moonshot", ".kimi"], "kimi"),
-            Box::new(KimiCliResolver::new()),
-            opencode_auth(OpencodeSlot::Kimi),
-        ]),
-        ProviderKind::Claude => multi_auth(vec![
-            Box::new(OAuthFileResolver::claude()),
-            opencode_auth(OpencodeSlot::Anthropic),
-            env_auth(&[("ANTHROPIC_API_KEY", "anthropic")]),
-        ]),
-        ProviderKind::Codex => multi_auth(vec![
-            Box::new(OAuthFileResolver::codex()),
-            opencode_auth(OpencodeSlot::Openai),
-            env_auth(&[("OPENAI_API_KEY", "openai")]),
-        ]),
+        ProviderKind::Minimax => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if shared {
+                resolvers.push(env_auth(&[("MINIMAX_API_KEY", "minimax")]));
+                resolvers.push(key_file_auth(&[".minimax"], "minimax"));
+                resolvers.push(opencode_auth(OpencodeSlot::Minimax));
+                resolvers.push(pi_auth(ProviderKind::Minimax));
+            }
+            multi_auth(resolvers)
+        }
+        ProviderKind::Zai => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if shared {
+                resolvers.push(env_auth(&[("ZHIPU_API_KEY", "zhipu"), ("ZAI_API_KEY", "zai")]));
+                resolvers.push(key_file_auth(&[".api-zai"], "zai"));
+                resolvers.push(opencode_auth(OpencodeSlot::Zai));
+                resolvers.push(pi_auth(ProviderKind::Zai));
+            }
+            multi_auth(resolvers)
+        }
+        ProviderKind::Kimi => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if shared {
+                resolvers.push(env_auth(&[
+                    ("MOONSHOT_API_KEY", "moonshot"),
+                    ("KIMI_API_KEY", "kimi"),
+                ]));
+                resolvers.push(key_file_auth(&[".moonshot", ".kimi"], "kimi"));
+                resolvers.push(Box::new(KimiCliResolver::new()));
+                resolvers.push(opencode_auth(OpencodeSlot::Kimi));
+                resolvers.push(pi_auth(ProviderKind::Kimi));
+            }
+            multi_auth(resolvers)
+        }
+        ProviderKind::Claude => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if let Some(path) = &instance.auth_path {
+                resolvers.push(Box::new(OAuthFileResolver::claude_at(path.clone())));
+            } else {
+                resolvers.push(Box::new(OAuthFileResolver::claude()));
+            }
+            if shared {
+                resolvers.push(opencode_auth(OpencodeSlot::Anthropic));
+                resolvers.push(pi_auth(ProviderKind::Claude));
+                resolvers.push(env_auth(&[("ANTHROPIC_API_KEY", "anthropic")]));
+            }
+            multi_auth(resolvers)
+        }
+        ProviderKind::Codex => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if let Some(path) = &instance.auth_path {
+                resolvers.push(Box::new(OAuthFileResolver::codex_at(path.clone())));
+            } else {
+                resolvers.push(Box::new(OAuthFileResolver::codex()));
+            }
+            if shared {
+                resolvers.push(opencode_auth(OpencodeSlot::Openai));
+                resolvers.push(pi_auth(ProviderKind::Codex));
+                resolvers.push(env_auth(&[("OPENAI_API_KEY", "openai")]));
+            }
+            multi_auth(resolvers)
+        }
         ProviderKind::Cursor => Box::new(CursorAuthResolver::new()),
         ProviderKind::DeepSeek => multi_auth(vec![
             env_auth(&[("DEEPSEEK_API_KEY", "deepseek")]),
             key_file_auth(&[".deepseek"], "deepseek"),
+            pi_auth(ProviderKind::DeepSeek),
         ]),
         ProviderKind::Antigravity => multi_auth(vec![
             Box::new(OAuthFileResolver::antigravity()),
@@ -206,6 +291,7 @@ fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthReso
                 ("GOOGLE_API_KEY", "antigravity"),
             ]),
             key_file_auth(&[".gemini-api-key", ".antigravity-api-key"], "antigravity"),
+            pi_auth(ProviderKind::Antigravity),
         ]),
         ProviderKind::SiliconFlow => multi_auth(vec![
             env_auth(&[
@@ -213,34 +299,47 @@ fn build_auth_resolver(kind: &ProviderKind, config: &Config) -> Box<dyn AuthReso
                 ("SILICON_FLOW_API_KEY", "siliconflow"),
             ]),
             key_file_auth(&[".siliconflow"], "siliconflow"),
+            pi_auth(ProviderKind::SiliconFlow),
         ]),
         ProviderKind::OpenRouter => multi_auth(vec![
             env_auth(&[("OPENROUTER_API_KEY", "openrouter")]),
             key_file_auth(&[".openrouter"], "openrouter"),
+            pi_auth(ProviderKind::OpenRouter),
         ]),
-        ProviderKind::Grok => multi_auth(vec![
-            // Prefer Grok Build's cached session (same auth as `grok login`).
-            Box::new(OAuthFileResolver::grok()),
-            env_auth(&[
-                ("XAI_MANAGEMENT_KEY", "xai_management"),
-                ("XAI_MGMT_KEY", "xai_mgmt"),
-                ("GROK_MANAGEMENT_KEY", "grok_management"),
-            ]),
-            key_file_auth(
-                &[
-                    ".xai-management-key",
-                    ".xai/management_key",
-                    ".config/xai/management_key",
-                ],
-                "xai-management",
-            ),
-            // Inference API key is last-resort; billing may still reject it.
-            env_auth(&[("XAI_API_KEY", "xai"), ("GROK_CODE_XAI_API_KEY", "grok_code")]),
-            key_file_auth(&[".xai", ".xai-api-key"], "xai"),
-        ]),
+        ProviderKind::Grok => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if let Some(path) = &instance.auth_path {
+                resolvers.push(Box::new(OAuthFileResolver::grok_at(path.clone())));
+            } else {
+                resolvers.push(Box::new(OAuthFileResolver::grok()));
+            }
+            if shared {
+                resolvers.push(pi_auth(ProviderKind::Grok));
+                resolvers.push(env_auth(&[
+                    ("XAI_MANAGEMENT_KEY", "xai_management"),
+                    ("XAI_MGMT_KEY", "xai_mgmt"),
+                    ("GROK_MANAGEMENT_KEY", "grok_management"),
+                ]));
+                resolvers.push(key_file_auth(
+                    &[
+                        ".xai-management-key",
+                        ".xai/management_key",
+                        ".config/xai/management_key",
+                    ],
+                    "xai-management",
+                ));
+                resolvers.push(env_auth(&[
+                    ("XAI_API_KEY", "xai"),
+                    ("GROK_CODE_XAI_API_KEY", "grok_code"),
+                ]));
+                resolvers.push(key_file_auth(&[".xai", ".xai-api-key"], "xai"));
+            }
+            multi_auth(resolvers)
+        }
         ProviderKind::GitHubCopilot => {
             let mut resolvers = vec![
                 opencode_auth(OpencodeSlot::GitHubCopilot),
+                pi_auth(ProviderKind::GitHubCopilot),
                 env_auth(&[("GITHUB_COPILOT_TOKEN", "github_copilot")]),
             ];
             if let Some(token) = config.github_copilot.token.clone() {
@@ -299,7 +398,13 @@ fn filter_kinds(requested: &[String], config: &Config, cached: bool) -> Vec<Prov
 }
 
 fn normalize_provider(name: &str) -> Option<ProviderKind> {
-    match name.to_lowercase().as_str() {
+    // Accept multi-profile cache keys like `grok:grok-1`.
+    let base = name
+        .split_once(':')
+        .map(|(k, _)| k)
+        .unwrap_or(name)
+        .to_lowercase();
+    match base.as_str() {
         "claude" | "anthropic" => Some(ProviderKind::Claude),
         "codex" | "chatgpt" | "openai" => Some(ProviderKind::Codex),
         "cursor" => Some(ProviderKind::Cursor),
@@ -319,11 +424,11 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
     }
 }
 
-async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
+async fn maybe_refresh_creds(instance: &ProviderInstance, config: &Config) {
     if !config.auto_refresh.enabled {
         return;
     }
-    match kind {
+    match instance.kind {
         ProviderKind::Kimi => {
             let path = refresh::kimi_creds_path();
             let _ = refresh::refresh_kimi_if_expired(&path).await;
@@ -333,27 +438,44 @@ async fn maybe_refresh_creds(kind: ProviderKind, config: &Config) {
             }
         }
         ProviderKind::Claude => {
-            let path = refresh::claude_creds_path();
+            let path = instance
+                .auth_path
+                .clone()
+                .unwrap_or_else(refresh::claude_creds_path);
             let _ = refresh::refresh_claude_if_expired(&path).await;
-            if let Some(oc) = refresh::opencode_creds_path() {
-                let _ = refresh::refresh_opencode_anthropic_if_expired(&oc).await;
+            if allow_shared_fallbacks(instance) {
+                if let Some(oc) = refresh::opencode_creds_path() {
+                    let _ = refresh::refresh_opencode_anthropic_if_expired(&oc).await;
+                }
             }
         }
         ProviderKind::Codex => {
-            let path = refresh::codex_creds_path();
+            let path = instance
+                .auth_path
+                .clone()
+                .unwrap_or_else(refresh::codex_creds_path);
             let _ = refresh::refresh_codex_if_expired(&path).await;
-            if let Some(oc) = refresh::opencode_creds_path() {
-                let _ = refresh::refresh_opencode_openai_if_expired(&oc).await;
+            if allow_shared_fallbacks(instance) {
+                if let Some(oc) = refresh::opencode_creds_path() {
+                    let _ = refresh::refresh_opencode_openai_if_expired(&oc).await;
+                }
             }
         }
         _ => {}
     }
 }
 
-async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
-    maybe_refresh_creds(kind, config).await;
-    let auth = build_auth_resolver(&kind, config);
-    let provider = build_provider(kind, auth);
+fn stamp_instance(mut result: ProviderResult, instance: &ProviderInstance) -> ProviderResult {
+    result.instance_key = Some(instance.instance_key.clone());
+    result.profile_id = Some(instance.profile_id.clone());
+    result.card_title = Some(instance.display_name.clone());
+    result
+}
+
+async fn fetch_one(instance: ProviderInstance, config: &Config) -> ProviderResult {
+    maybe_refresh_creds(&instance, config).await;
+    let auth = build_auth_resolver(&instance, config);
+    let provider = build_provider(instance.kind, auth);
     // Pre-resolve to capture the auth source string for the detail view.
     // This is a lightweight re-resolve (env var / file read) after any token
     // refresh that already happened in maybe_refresh_creds.
@@ -366,11 +488,11 @@ async fn fetch_one(kind: ProviderKind, config: &Config) -> ProviderResult {
 
     let mut result = match provider.fetch().await {
         Ok(r) => r,
-        Err(quotas::Error::Auth(msg)) => auth_required_result(kind, msg),
-        Err(e) => network_error_result(kind, e.to_string()),
+        Err(quotas::Error::Auth(msg)) => auth_required_result(instance.kind, msg),
+        Err(e) => network_error_result(instance.kind, e.to_string()),
     };
     result.auth_source = auth_source;
-    result
+    stamp_instance(result, &instance)
 }
 
 fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Provider> {
@@ -405,15 +527,16 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
     }
 }
 
-fn fetch_provider_sync(kind: ProviderKind, config: &Config) -> ProviderResult {
+fn fetch_provider_sync(instance: ProviderInstance, config: &Config) -> ProviderResult {
+    let kind = instance.kind;
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(e) => return network_error_result(kind, e.to_string()),
+        Err(e) => return stamp_instance(network_error_result(kind, e.to_string()), &instance),
     };
-    rt.block_on(fetch_one(kind, config))
+    rt.block_on(fetch_one(instance, config))
 }
 
 fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
@@ -424,6 +547,9 @@ fn auth_required_result(kind: ProviderKind, _reason: String) -> ProviderResult {
         raw_response: None,
         auth_source: None,
         cached_at: None,
+        instance_key: None,
+        profile_id: None,
+        card_title: None,
     }
 }
 
@@ -435,6 +561,9 @@ fn network_error_result(kind: ProviderKind, message: String) -> ProviderResult {
         raw_response: None,
         auth_source: None,
         cached_at: None,
+        instance_key: None,
+        profile_id: None,
+        card_title: None,
     }
 }
 
@@ -499,10 +628,10 @@ fn refresh_update_cache_sync() -> quotas::Result<update::UpdateInfo> {
     rt.block_on(update::refresh_update_cache(env!("CARGO_PKG_VERSION")))
 }
 
-fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
-    let results: Vec<ProviderResult> = kinds
+fn fetch_all(instances: Vec<ProviderInstance>, config: &Config) -> Vec<ProviderResult> {
+    let results: Vec<ProviderResult> = instances
         .into_iter()
-        .map(|k| fetch_provider_sync(k, config))
+        .map(|inst| fetch_provider_sync(inst, config))
         .collect();
     cache::write_cache(&results);
     results
@@ -510,32 +639,46 @@ fn fetch_all(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
 
 /// Fetch with cache-first semantics: return cached data if fresh, otherwise
 /// fetch fresh data and update the cache. Uses per-provider staleness thresholds.
-fn fetch_with_staleness_check(kinds: Vec<ProviderKind>, config: &Config) -> Vec<ProviderResult> {
+fn fetch_with_staleness_check(
+    instances: Vec<ProviderInstance>,
+    config: &Config,
+) -> Vec<ProviderResult> {
     let cache = cache::read_cache();
     let now = chrono::Utc::now();
-    let mut results = Vec::with_capacity(kinds.len());
+    let mut results = Vec::with_capacity(instances.len());
     let mut fresh_results = Vec::new();
 
-    for kind in kinds {
-        let key = kind.slug().to_string();
-        let staleness_threshold = config.staleness.staleness_threshold(&key);
+    for instance in instances {
+        let key = instance.instance_key.clone();
+        // Staleness keyed by bare provider slug (config doesn't list every profile).
+        let staleness_threshold = config
+            .staleness
+            .staleness_threshold(instance.kind.slug());
 
-        if let Some(entry) = cache.entries.get(&key) {
+        if let Some(entry) = cache
+            .entries
+            .get(&key)
+            .or_else(|| {
+                // Legacy single-slot cache for sole/default instances.
+                if key == instance.kind.slug() || instance.is_active_default {
+                    cache.entries.get(instance.kind.slug())
+                } else {
+                    None
+                }
+            })
+        {
             let age_secs = (now - entry.cached_at).num_seconds() as u64;
             if age_secs < staleness_threshold {
-                // Cache hit — fresh enough, use cached result with its cached_at.
                 let mut result = entry.result.clone();
                 result.cached_at = Some(entry.cached_at);
-                results.push(result);
+                results.push(stamp_instance(result, &instance));
                 continue;
             }
         }
-        // Cache miss or stale — fetch fresh.
-        let result = fetch_provider_sync(kind, config);
+        let result = fetch_provider_sync(instance, config);
         fresh_results.push(result);
     }
 
-    // Write all fresh results to cache.
     if !fresh_results.is_empty() {
         cache::write_cache(&fresh_results);
     }
@@ -555,28 +698,44 @@ struct PlannedProviderEntry {
     fetch_on_start: bool,
 }
 
+fn cache_lookup<'a>(
+    disk_cache: &'a cache::CacheFile,
+    instance: &ProviderInstance,
+) -> Option<&'a cache::CacheEntry> {
+    disk_cache
+        .entries
+        .get(&instance.instance_key)
+        .or_else(|| {
+            if instance.instance_key == instance.kind.slug() || instance.is_active_default {
+                disk_cache.entries.get(instance.kind.slug())
+            } else {
+                None
+            }
+        })
+}
+
 fn build_tui_startup_plan(
-    kinds: &[ProviderKind],
+    instances: &[ProviderInstance],
     config: &Config,
     disk_cache: &cache::CacheFile,
     now: chrono::DateTime<chrono::Utc>,
     cached: bool,
 ) -> TuiStartupPlan {
-    let auth_resolvers: Vec<Box<dyn AuthResolver>> = kinds
+    let auth_resolvers: Vec<Box<dyn AuthResolver>> = instances
         .iter()
-        .map(|kind| build_auth_resolver(kind, config))
+        .map(|inst| build_auth_resolver(inst, config))
         .collect();
     let auth_ready: Vec<bool> = auth_resolvers
         .iter()
         .map(|resolver| resolver.have_credentials())
         .collect();
 
-    let mut entries = Vec::with_capacity(kinds.len());
+    let mut entries = Vec::with_capacity(instances.len());
     let mut fetch_indices = Vec::new();
-    for (idx, kind) in kinds.iter().enumerate() {
-        let cached_entry = disk_cache.entries.get(kind.slug());
+    for (idx, instance) in instances.iter().enumerate() {
+        let cached_entry = cache_lookup(disk_cache, instance);
         let planned = plan_tui_provider_entry(
-            *kind,
+            instance,
             cached_entry,
             cached,
             config.tui.refresh_on_start,
@@ -597,27 +756,37 @@ fn build_tui_startup_plan(
 }
 
 fn plan_tui_provider_entry(
-    kind: ProviderKind,
+    instance: &ProviderInstance,
     cached_entry: Option<&cache::CacheEntry>,
     cached_mode: bool,
     refresh_on_start: bool,
     has_creds: bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> PlannedProviderEntry {
+    let kind = instance.kind;
     let fetch_on_start = should_startup_fetch(cached_mode, refresh_on_start, has_creds);
 
     if cached_mode {
         let result = match cached_entry {
-            Some(entry) => cached_provider_result(entry),
-            None if has_creds => ProviderResult {
-                kind,
-                status: quotas::providers::ProviderStatus::AuthRequired,
-                fetched_at: now,
-                raw_response: None,
-                auth_source: None,
-                cached_at: None,
-            },
-            None => auth_required_result(kind, "no credentials".into()),
+            Some(entry) => stamp_instance(cached_provider_result(entry), instance),
+            None if has_creds => stamp_instance(
+                ProviderResult {
+                    kind,
+                    status: quotas::providers::ProviderStatus::AuthRequired,
+                    fetched_at: now,
+                    raw_response: None,
+                    auth_source: None,
+                    cached_at: None,
+                    instance_key: None,
+                    profile_id: None,
+                    card_title: None,
+                },
+                instance,
+            ),
+            None => stamp_instance(
+                auth_required_result(kind, "no credentials".into()),
+                instance,
+            ),
         };
         return PlannedProviderEntry {
             entry: ProviderEntry::Done(result),
@@ -626,7 +795,7 @@ fn plan_tui_provider_entry(
     }
 
     if let Some(entry) = cached_entry {
-        let result = cached_provider_result(entry);
+        let result = stamp_instance(cached_provider_result(entry), instance);
         return PlannedProviderEntry {
             entry: if fetch_on_start {
                 ProviderEntry::Refreshing(result)
@@ -646,28 +815,38 @@ fn plan_tui_provider_entry(
         }
 
         return PlannedProviderEntry {
-            entry: ProviderEntry::Done(ProviderResult {
-                kind,
-                status: quotas::providers::ProviderStatus::Unavailable {
-                    info: quotas::providers::UnavailableInfo {
-                        reason: "No cached data; startup refresh disabled".into(),
-                        console_url: None,
+            entry: ProviderEntry::Done(stamp_instance(
+                ProviderResult {
+                    kind,
+                    status: quotas::providers::ProviderStatus::Unavailable {
+                        info: quotas::providers::UnavailableInfo {
+                            reason: "No cached data; startup refresh disabled".into(),
+                            console_url: None,
+                        },
                     },
+                    fetched_at: now,
+                    raw_response: None,
+                    auth_source: None,
+                    cached_at: None,
+                    instance_key: None,
+                    profile_id: None,
+                    card_title: None,
                 },
-                fetched_at: now,
-                raw_response: None,
-                auth_source: None,
-                cached_at: None,
-            }),
+                instance,
+            )),
             fetch_on_start: false,
         };
     }
 
     PlannedProviderEntry {
-        entry: ProviderEntry::Done(auth_required_result(kind, "no credentials".into())),
+        entry: ProviderEntry::Done(stamp_instance(
+            auth_required_result(kind, "no credentials".into()),
+            instance,
+        )),
         fetch_on_start: false,
     }
 }
+
 
 fn cached_provider_result(entry: &cache::CacheEntry) -> ProviderResult {
     let mut result = entry.result.clone();
@@ -711,11 +890,11 @@ impl TuiFetchController {
     fn spawn_startup(
         &self,
         rt: &tokio::runtime::Runtime,
-        kinds: &[ProviderKind],
+        instances: &[ProviderInstance],
         indices: &[usize],
         config: &Config,
     ) {
-        self.spawn_fetches(rt, kinds, indices, config);
+        self.spawn_fetches(rt, instances, indices, config);
     }
 
     fn drain_completed(&mut self, dashboard: &mut Dashboard) {
@@ -729,7 +908,7 @@ impl TuiFetchController {
     fn refresh_due(
         &mut self,
         rt: &tokio::runtime::Runtime,
-        kinds: &[ProviderKind],
+        instances: &[ProviderInstance],
         config: &Config,
         cached: bool,
         auth_ready: &[bool],
@@ -739,6 +918,7 @@ impl TuiFetchController {
             return;
         }
 
+        let kinds: Vec<ProviderKind> = instances.iter().map(|i| i.kind).collect();
         let elapsed: Vec<Duration> = self
             .last_refresh
             .iter()
@@ -752,26 +932,26 @@ impl TuiFetchController {
             auto_refresh_enabled: dashboard.auto_refresh_enabled,
             show_detail: dashboard.show_detail,
             selected_entry: dashboard.selected_entry_index(),
-            kinds,
+            kinds: &kinds,
             auth_ready,
             entry_done: &entry_done,
             elapsed: &elapsed,
         });
 
-        self.refresh_indices(rt, kinds, &targets, config, dashboard);
+        self.refresh_indices(rt, instances, &targets, config, dashboard);
     }
 
     fn refresh_all_fetchable(
         &mut self,
         rt: &tokio::runtime::Runtime,
-        kinds: &[ProviderKind],
+        instances: &[ProviderInstance],
         config: &Config,
         auth_ready: &[bool],
         dashboard: &mut Dashboard,
     ) {
         self.replace_channel();
-        let fetchable = fetchable_indices(kinds.len(), auth_ready);
-        self.refresh_indices(rt, kinds, &fetchable, config, dashboard);
+        let fetchable = fetchable_indices(instances.len(), auth_ready);
+        self.refresh_indices(rt, instances, &fetchable, config, dashboard);
     }
 
     fn replace_channel(&mut self) {
@@ -783,7 +963,7 @@ impl TuiFetchController {
     fn refresh_indices(
         &mut self,
         rt: &tokio::runtime::Runtime,
-        kinds: &[ProviderKind],
+        instances: &[ProviderInstance],
         indices: &[usize],
         config: &Config,
         dashboard: &mut Dashboard,
@@ -791,25 +971,25 @@ impl TuiFetchController {
         for &idx in indices {
             dashboard.reset_one(idx);
         }
-        self.spawn_fetches(rt, kinds, indices, config);
+        self.spawn_fetches(rt, instances, indices, config);
         self.mark_started(indices);
     }
 
     fn spawn_fetches(
         &self,
         rt: &tokio::runtime::Runtime,
-        kinds: &[ProviderKind],
+        instances: &[ProviderInstance],
         indices: &[usize],
         config: &Config,
     ) {
         for &idx in indices {
-            let Some(&kind) = kinds.get(idx) else {
+            let Some(instance) = instances.get(idx).cloned() else {
                 continue;
             };
             let tx = self.tx.clone();
             let config = config.clone();
             rt.spawn(async move {
-                let result = fetch_one(kind, &config).await;
+                let result = fetch_one(instance, &config).await;
                 let _ = tx.send((idx, result));
             });
         }
@@ -917,7 +1097,7 @@ fn apply_dashboard_config(dashboard: &mut Dashboard, config: &Config) {
 }
 
 fn run_snap(
-    kinds: Vec<ProviderKind>,
+    instances: Vec<ProviderInstance>,
     config: Config,
     width: u16,
     height: u16,
@@ -926,26 +1106,35 @@ fn run_snap(
     let disk_cache = cache::read_cache();
     let now = chrono::Utc::now();
 
-    let entries: Vec<ProviderEntry> = kinds
+    let entries: Vec<ProviderEntry> = instances
         .iter()
-        .map(|kind| {
-            let key = kind.slug().to_string();
-            if let Some(entry) = disk_cache.entries.get(&key) {
-                ProviderEntry::Done(cached_provider_result(entry))
+        .map(|instance| {
+            if let Some(entry) = cache_lookup(&disk_cache, instance) {
+                ProviderEntry::Done(stamp_instance(cached_provider_result(entry), instance))
             } else {
-                ProviderEntry::Done(ProviderResult {
-                    kind: *kind,
-                    status: quotas::providers::ProviderStatus::AuthRequired,
-                    fetched_at: now,
-                    raw_response: None,
-                    auth_source: None,
-                    cached_at: None,
-                })
+                ProviderEntry::Done(stamp_instance(
+                    ProviderResult {
+                        kind: instance.kind,
+                        status: quotas::providers::ProviderStatus::AuthRequired,
+                        fetched_at: now,
+                        raw_response: None,
+                        auth_source: None,
+                        cached_at: None,
+                        instance_key: None,
+                        profile_id: None,
+                        card_title: None,
+                    },
+                    instance,
+                ))
             }
         })
         .collect();
 
-    let mut dashboard = Dashboard::new_with_entries(kinds, entries);
+    let kinds: Vec<ProviderKind> = instances.iter().map(|i| i.kind).collect();
+    let card_titles: Vec<String> = instances.iter().map(|i| i.display_name.clone()).collect();
+    let instance_keys: Vec<String> = instances.iter().map(|i| i.instance_key.clone()).collect();
+    let mut dashboard =
+        Dashboard::new_with_entries_labeled(kinds, card_titles, instance_keys, entries);
     apply_dashboard_config(&mut dashboard, &config);
 
     let out = render_dashboard_text(&dashboard, width, height);
@@ -983,7 +1172,7 @@ enum TuiLoopAction {
 
 struct TuiEventContext<'a> {
     rt: &'a tokio::runtime::Runtime,
-    kinds: &'a [ProviderKind],
+    instances: &'a [ProviderInstance],
     auth_ready: &'a [bool],
     config: &'a mut Config,
     dashboard: &'a mut Dashboard,
@@ -1019,7 +1208,7 @@ fn handle_mouse_event(mouse: MouseEvent, ctx: TuiEventContext<'_>) -> TuiLoopAct
                 Some(HitResult::Refresh) => {
                     ctx.fetches.refresh_all_fetchable(
                         ctx.rt,
-                        ctx.kinds,
+                        ctx.instances,
                         ctx.config,
                         ctx.auth_ready,
                         ctx.dashboard,
@@ -1066,7 +1255,7 @@ fn handle_key_event(code: KeyCode, ctx: TuiEventContext<'_>) -> TuiLoopAction {
         KeyCode::Char('r') | KeyCode::Char('R') => {
             ctx.fetches.refresh_all_fetchable(
                 ctx.rt,
-                ctx.kinds,
+                ctx.instances,
                 ctx.config,
                 ctx.auth_ready,
                 ctx.dashboard,
@@ -1176,7 +1365,7 @@ fn handle_key_event(code: KeyCode, ctx: TuiEventContext<'_>) -> TuiLoopAction {
 }
 
 fn run_tui(
-    kinds: Vec<ProviderKind>,
+    instances: Vec<ProviderInstance>,
     config: Config,
     cached: bool,
     update_check_enabled: bool,
@@ -1194,9 +1383,17 @@ fn run_tui(
         entries: initial_entries,
         fetch_indices,
         auth_ready,
-    } = build_tui_startup_plan(&kinds, &config, &disk_cache, now, cached);
+    } = build_tui_startup_plan(&instances, &config, &disk_cache, now, cached);
 
-    let mut dashboard = Dashboard::new_with_entries(kinds.clone(), initial_entries);
+    let kinds: Vec<ProviderKind> = instances.iter().map(|i| i.kind).collect();
+    let card_titles: Vec<String> = instances.iter().map(|i| i.display_name.clone()).collect();
+    let instance_keys: Vec<String> = instances.iter().map(|i| i.instance_key.clone()).collect();
+    let mut dashboard = Dashboard::new_with_entries_labeled(
+        kinds.clone(),
+        card_titles,
+        instance_keys,
+        initial_entries,
+    );
     dashboard.set_update_info(update::cached_update_info(env!("CARGO_PKG_VERSION")));
     let mut update_rx = None;
     if update_check_enabled && !cached && update::should_check_for_update(now) {
@@ -1225,7 +1422,7 @@ fn run_tui(
         &fetch_indices,
         config.tui.refresh_on_start,
     );
-    fetches.spawn_startup(&rt, &kinds, &fetch_indices, &config);
+    fetches.spawn_startup(&rt, &instances, &fetch_indices, &config);
 
     let tick = Duration::from_millis(80);
     let result: io::Result<()> = (|| loop {
@@ -1242,14 +1439,14 @@ fn run_tui(
         // Per-provider auto-refresh: each provider refreshes on its own schedule.
         // Claude uses a longer interval to avoid rate-limiting.
         // Skip providers without credentials.
-        fetches.refresh_due(&rt, &kinds, &config, cached, &auth_ready, &mut dashboard);
+        fetches.refresh_due(&rt, &instances, &config, cached, &auth_ready, &mut dashboard);
 
         if crossterm::event::poll(tick)? {
             let action = handle_tui_event(
                 crossterm::event::read()?,
                 TuiEventContext {
                     rt: &rt,
-                    kinds: &kinds,
+                    instances: &instances,
                     auth_ready: &auth_ready,
                     config: &mut config,
                     dashboard: &mut dashboard,
@@ -1278,10 +1475,11 @@ fn main() {
     let args = Args::parse();
     let config = Config::load();
     let kinds = filter_kinds(&args.provider, &config, args.cached);
+    let instances = instances_for_kinds(&kinds, &config);
 
     // Hidden: fetch + write cache, exit silently (used by background refresh).
     if args.update_cache {
-        let _ = fetch_all(kinds, &config);
+        let _ = fetch_all(instances, &config);
         return;
     }
 
@@ -1304,10 +1502,10 @@ fn main() {
     }
 
     if args.raw {
-        let results = fetch_all(kinds, &config);
+        let results = fetch_all(instances, &config);
         let mut map = serde_json::Map::new();
         for r in results {
-            let key = r.kind.slug().to_string();
+            let key = r.cache_key();
             let value = match r.raw_response {
                 Some(v) => v,
                 None => serde_json::json!({
@@ -1343,9 +1541,9 @@ fn main() {
                 })
                 .collect()
         } else if args.ensure_current {
-            fetch_with_staleness_check(kinds, &config)
+            fetch_with_staleness_check(instances, &config)
         } else {
-            fetch_all(kinds, &config)
+            fetch_all(instances, &config)
         };
         let cache = cache::read_cache();
         println!(
@@ -1362,7 +1560,7 @@ fn main() {
 
     if args.snap {
         run_snap(
-            kinds,
+            instances,
             config,
             args.snap_width,
             args.snap_height,
@@ -1371,7 +1569,7 @@ fn main() {
         return;
     }
 
-    if let Err(e) = run_tui(kinds.clone(), config, args.cached, !args.no_update_check) {
+    if let Err(e) = run_tui(instances, config, args.cached, !args.no_update_check) {
         eprintln!("Error: {:?}", e);
     }
 }
@@ -1493,13 +1691,17 @@ mod tests {
         assert!(!should_startup_fetch(false, true, false));
     }
 
+    fn single_inst(kind: ProviderKind) -> ProviderInstance {
+        ProviderInstance::single(kind)
+    }
+
     #[test]
     fn startup_plan_uses_cached_entry_without_fetch_in_cached_mode() {
         let now = chrono::Utc::now();
         let cached = test_cache_entry(ProviderKind::Claude);
+        let inst = single_inst(ProviderKind::Claude);
 
-        let planned =
-            plan_tui_provider_entry(ProviderKind::Claude, Some(&cached), true, true, true, now);
+        let planned = plan_tui_provider_entry(&inst, Some(&cached), true, true, true, now);
 
         assert!(!planned.fetch_on_start);
         match planned.entry {
@@ -1515,9 +1717,9 @@ mod tests {
     fn startup_plan_refreshes_cached_entry_when_startup_fetch_enabled() {
         let now = chrono::Utc::now();
         let cached = test_cache_entry(ProviderKind::Codex);
+        let inst = single_inst(ProviderKind::Codex);
 
-        let planned =
-            plan_tui_provider_entry(ProviderKind::Codex, Some(&cached), false, true, true, now);
+        let planned = plan_tui_provider_entry(&inst, Some(&cached), false, true, true, now);
 
         assert!(planned.fetch_on_start);
         match planned.entry {
@@ -1531,14 +1733,9 @@ mod tests {
 
     #[test]
     fn startup_plan_reports_missing_cache_when_refresh_disabled() {
-        let planned = plan_tui_provider_entry(
-            ProviderKind::Antigravity,
-            None,
-            false,
-            false,
-            true,
-            chrono::Utc::now(),
-        );
+        let inst = single_inst(ProviderKind::Antigravity);
+        let planned =
+            plan_tui_provider_entry(&inst, None, false, false, true, chrono::Utc::now());
 
         assert!(!planned.fetch_on_start);
         match planned.entry {
@@ -1554,14 +1751,9 @@ mod tests {
 
     #[test]
     fn startup_plan_requires_auth_without_credentials() {
-        let planned = plan_tui_provider_entry(
-            ProviderKind::DeepSeek,
-            None,
-            false,
-            true,
-            false,
-            chrono::Utc::now(),
-        );
+        let inst = single_inst(ProviderKind::DeepSeek);
+        let planned =
+            plan_tui_provider_entry(&inst, None, false, true, false, chrono::Utc::now());
 
         assert!(!planned.fetch_on_start);
         match planned.entry {
@@ -1675,6 +1867,9 @@ mod tests {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             },
             cached_at,
         }

@@ -108,6 +108,9 @@ impl MimoProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }));
         }
 
@@ -134,6 +137,9 @@ impl MimoProvider {
                     raw_response: Some(body),
                     auth_source: None,
                     cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
                 }));
             }
         }
@@ -146,6 +152,9 @@ impl MimoProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             })),
             Err(_) => Ok(None),
         }
@@ -180,6 +189,9 @@ impl MimoProvider {
                         raw_response: Some(body),
                         auth_source: None,
                         cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
                     });
                 }
                 if status < 400 {
@@ -197,6 +209,9 @@ impl MimoProvider {
                             raw_response: Some(body),
                             auth_source: None,
                             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
                         });
                     }
                 }
@@ -228,6 +243,9 @@ impl MimoProvider {
                         raw_response: Some(body),
                         auth_source: None,
                         cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
                     });
                 }
                 if status < 400 {
@@ -239,6 +257,9 @@ impl MimoProvider {
                         raw_response: Some(body),
                         auth_source: None,
                         cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
                     });
                 }
             }
@@ -258,6 +279,9 @@ impl MimoProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
             None => Ok(ProviderResult {
                 kind: ProviderKind::Mimo,
@@ -271,6 +295,9 @@ impl MimoProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
         }
     }

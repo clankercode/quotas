@@ -41,6 +41,11 @@ pub struct WindowJson {
 #[derive(Serialize)]
 pub struct ProviderJson {
     pub name: String,
+    /// Stable instance id (`grok` or `grok:grok-1`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     pub status: ProviderStatusJson,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,9 +59,16 @@ impl JsonOutput {
         let providers = results
             .into_iter()
             .map(|r| {
-                let cached_at = cache.entries.get(r.kind.slug()).map(|e| e.cached_at);
+                let key = r.cache_key();
+                let cached_at = cache
+                    .entries
+                    .get(&key)
+                    .or_else(|| cache.entries.get(r.kind.slug()))
+                    .map(|e| e.cached_at);
                 ProviderJson {
-                    name: r.kind.display_name().to_lowercase(),
+                    name: r.title().to_lowercase(),
+                    id: Some(key),
+                    profile_id: r.profile_id.clone(),
                     status: match r.status {
                         ProviderStatus::Available { quota } => ProviderStatusJson::Available {
                             plan_name: quota.plan_name,

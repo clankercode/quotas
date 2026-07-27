@@ -168,6 +168,18 @@ pub struct OAuthFileResolver {
 }
 
 impl OAuthFileResolver {
+    pub fn with_paths(
+        file_paths: Vec<PathBuf>,
+        parse_fn: fn(&str) -> Option<String>,
+        source_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            file_paths,
+            parse_fn,
+            source_name: source_name.into(),
+        }
+    }
+
     pub fn codex() -> Self {
         Self {
             file_paths: vec![dirs::home_dir()
@@ -176,6 +188,11 @@ impl OAuthFileResolver {
             parse_fn: parse_codex_auth,
             source_name: "codex".to_string(),
         }
+    }
+
+    /// Codex auth from a specific profile auth.json.
+    pub fn codex_at(auth_path: PathBuf) -> Self {
+        Self::with_paths(vec![auth_path], parse_codex_auth, "codex")
     }
 
     pub fn claude() -> Self {
@@ -191,6 +208,11 @@ impl OAuthFileResolver {
             parse_fn: parse_claude_credentials,
             source_name: "claude".to_string(),
         }
+    }
+
+    /// Claude credentials from a specific profile path.
+    pub fn claude_at(auth_path: PathBuf) -> Self {
+        Self::with_paths(vec![auth_path], parse_claude_credentials, "claude")
     }
 
     pub fn antigravity() -> Self {
@@ -242,6 +264,11 @@ impl OAuthFileResolver {
             parse_fn: parse_grok_auth,
             source_name: "grok".to_string(),
         }
+    }
+
+    /// Grok Build session from a specific profile auth.json.
+    pub fn grok_at(auth_path: PathBuf) -> Self {
+        Self::with_paths(vec![auth_path], parse_grok_auth, "grok")
     }
 }
 

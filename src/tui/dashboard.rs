@@ -54,6 +54,10 @@ struct GridLayout {
 
 pub struct Dashboard {
     pub kinds: Vec<ProviderKind>,
+    /// Parallel to `kinds` — multi-profile card titles (`Grok (grok-1)`).
+    pub card_titles: Vec<String>,
+    /// Parallel to `kinds` — cache/favorites keys (`grok:grok-1`).
+    pub instance_keys: Vec<String>,
     pub entries: Vec<ProviderEntry>,
     pub selected_index: usize,
     pub show_detail: bool,
@@ -83,10 +87,22 @@ pub struct Dashboard {
 
 impl Dashboard {
     pub fn new_loading(kinds: Vec<ProviderKind>) -> Self {
+        let card_titles: Vec<String> = kinds.iter().map(|k| k.display_name().to_string()).collect();
+        let instance_keys: Vec<String> = kinds.iter().map(|k| k.slug().to_string()).collect();
+        Self::new_loading_labeled(kinds, card_titles, instance_keys)
+    }
+
+    pub fn new_loading_labeled(
+        kinds: Vec<ProviderKind>,
+        card_titles: Vec<String>,
+        instance_keys: Vec<String>,
+    ) -> Self {
         let n = kinds.len();
         let entries = kinds.iter().map(|_| ProviderEntry::Loading).collect();
         Self {
             kinds,
+            card_titles,
+            instance_keys,
             entries,
             selected_index: 0,
             show_detail: false,
@@ -113,10 +129,23 @@ impl Dashboard {
     /// Create a dashboard with pre-populated entries (mix of Done, Loading, Refreshing).
     /// If all entries are already Done, the visual order is frozen immediately.
     pub fn new_with_entries(kinds: Vec<ProviderKind>, entries: Vec<ProviderEntry>) -> Self {
+        let card_titles: Vec<String> = kinds.iter().map(|k| k.display_name().to_string()).collect();
+        let instance_keys: Vec<String> = kinds.iter().map(|k| k.slug().to_string()).collect();
+        Self::new_with_entries_labeled(kinds, card_titles, instance_keys, entries)
+    }
+
+    pub fn new_with_entries_labeled(
+        kinds: Vec<ProviderKind>,
+        card_titles: Vec<String>,
+        instance_keys: Vec<String>,
+        entries: Vec<ProviderEntry>,
+    ) -> Self {
         let n = kinds.len();
         let all_done = entries.iter().all(|e| matches!(e, ProviderEntry::Done(_)));
         let mut dashboard = Self {
             kinds,
+            card_titles,
+            instance_keys,
             entries,
             selected_index: 0,
             show_detail: false,
@@ -271,30 +300,31 @@ impl Dashboard {
     }
 
     pub fn selected_provider_slug(&self) -> Option<String> {
-        Some(self.selected_provider()?.kind.slug().to_string())
+        Some(self.selected_provider()?.cache_key())
     }
 
     pub fn selected_detail_row(&self) -> Option<super::detail::DetailRowKey> {
         let selected = self.selected_provider()?;
-        let prefs = self
-            .quota_preferences
-            .get(selected.kind.slug())
-            .cloned()
-            .unwrap_or_default();
+        let prefs = self.quota_prefs_for(selected);
         detail_row_keys(selected, self.show_all_windows, &prefs)
             .get(self.detail_focus)
             .cloned()
+    }
+
+    fn quota_prefs_for(&self, selected: &ProviderResult) -> QuotaPreferences {
+        let key = selected.cache_key();
+        self.quota_preferences
+            .get(&key)
+            .or_else(|| self.quota_preferences.get(selected.kind.slug()))
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn move_detail_focus(&mut self, delta: i32) {
         let Some(selected) = self.selected_provider() else {
             return;
         };
-        let prefs = self
-            .quota_preferences
-            .get(selected.kind.slug())
-            .cloned()
-            .unwrap_or_default();
+        let prefs = self.quota_prefs_for(selected);
         let row_count = detail_row_keys(selected, self.show_all_windows, &prefs).len();
         if row_count == 0 {
             self.detail_focus = 0;
@@ -745,14 +775,14 @@ impl Dashboard {
             .count();
 
         // Collect names of providers with no API key for the footer indicator.
-        let unconfigured: Vec<&str> = self
+        let unconfigured: Vec<String> = self
             .entries
             .iter()
             .filter_map(|e| match e {
                 ProviderEntry::Done(r) | ProviderEntry::Refreshing(r)
                     if matches!(r.status, ProviderStatus::AuthRequired) =>
                 {
-                    Some(r.kind.display_name())
+                    Some(r.title())
                 }
                 _ => None,
             })
@@ -1009,8 +1039,17 @@ impl Dashboard {
 
         match &self.entries[idx] {
             ProviderEntry::Loading => {
-                let name = self.kinds[idx].display_name();
-                let favorite_marker = if self.is_provider_favorite(self.kinds[idx].slug()) {
+                let name = self
+                    .card_titles
+                    .get(idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or_else(|| self.kinds[idx].display_name());
+                let fav_key = self
+                    .instance_keys
+                    .get(idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or_else(|| self.kinds[idx].slug());
+                let favorite_marker = if self.is_provider_favorite(fav_key) {
                     "★ "
                 } else {
                     ""
@@ -1063,7 +1102,10 @@ impl Dashboard {
         use crate::tui::freshness::{FreshnessLabel, Staleness};
 
         let is_auth = matches!(result.status, ProviderStatus::AuthRequired);
-        let favorite_marker = if self.is_provider_favorite(result.kind.slug()) {
+        let fav_key = result.cache_key();
+        let favorite_marker = if self.is_provider_favorite(&fav_key)
+            || self.is_provider_favorite(result.kind.slug())
+        {
             "★ "
         } else {
             ""
@@ -1076,7 +1118,7 @@ impl Dashboard {
             "{} {}{}",
             if selected { "▶" } else { " " },
             favorite_marker,
-            result.kind.display_name()
+            result.title()
         );
         let name_len = name_part.chars().count();
         let avail_for_fresh = (inner.width as usize).saturating_sub(name_len + 2);
@@ -1346,11 +1388,7 @@ impl Dashboard {
 
         if let Some(selected) = self.selected_provider() {
             let view = DetailView::new(selected.clone());
-            let quota_preferences = self
-                .quota_preferences
-                .get(selected.kind.slug())
-                .cloned()
-                .unwrap_or_default();
+            let quota_preferences = self.quota_prefs_for(selected);
             let detail_area = Rect::new(
                 area.x,
                 area.y + 3,
@@ -1362,7 +1400,8 @@ impl Dashboard {
                 height: detail_area.height,
                 mode: self.detail_mode,
                 auto_refresh: self.auto_refresh_enabled,
-                provider_favorite: self.is_provider_favorite(selected.kind.slug()),
+                provider_favorite: self.is_provider_favorite(&selected.cache_key())
+                    || self.is_provider_favorite(selected.kind.slug()),
                 preferences: &quota_preferences,
                 focused_row: Some(self.detail_focus),
             });
@@ -1405,7 +1444,7 @@ struct FooterLayout {
 fn footer_line(
     loaded: usize,
     total: usize,
-    unconfigured: &[&str],
+    unconfigured: &[String],
     current_version: &str,
     update_info: Option<&UpdateInfo>,
     update_hovered: bool,
@@ -1652,6 +1691,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -1663,6 +1705,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -1732,6 +1777,9 @@ mod tests {
                 "oauth:/home/xertrov/.gemini/antigravity-cli/antigravity-oauth-token".into(),
             ),
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 

@@ -121,6 +121,9 @@ impl GrokProvider {
             })),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 
@@ -181,6 +184,9 @@ impl GrokProvider {
                 })),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -201,6 +207,9 @@ impl GrokProvider {
             })),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 
@@ -404,14 +413,25 @@ fn pct_to_units(pct: f64) -> (i64, i64, i64) {
 
 fn period_type_label(period_type: &str) -> &'static str {
     let upper = period_type.to_ascii_uppercase();
+    // Prefer compact duration labels used elsewhere (Codex/Antigravity: 7d, 5h).
     if upper.contains("WEEK") {
-        "weekly"
+        "7d"
     } else if upper.contains("MONTH") {
         "monthly"
     } else if upper.contains("DAY") {
         "daily"
     } else {
         "period"
+    }
+}
+
+/// Short card labels for Grok productUsage rows.
+fn shorten_grok_product(name: &str) -> &str {
+    match name {
+        "GrokBuild" => "build",
+        "Api" | "API" => "api",
+        "GrokChat" => "chat",
+        other => other,
     }
 }
 
@@ -479,7 +499,7 @@ pub(crate) fn parse_cli_billing(
         .and_then(|p| p.get("type"))
         .and_then(|t| t.as_str())
         .map(period_type_label)
-        .unwrap_or("weekly");
+        .unwrap_or("7d");
     let period_start = period
         .and_then(|p| p.get("start"))
         .and_then(|v| v.as_str())
@@ -507,51 +527,47 @@ pub(crate) fn parse_cli_billing(
         _ => None,
     };
 
-    let mut saw_product_usage = false;
+    // Combined period usage (API + Build + …) — always surface when present.
+    // This is the unified weekly limit shown by Grok Build /usage; per-product
+    // rows below are a breakdown of the same pool.
+    if let Some(pct) = credits_cfg
+        .get("creditUsagePercent")
+        .or_else(|| credits_cfg.get("credit_usage_percent"))
+        .and_then(|v| v.as_f64())
+    {
+        let (used, limit, remaining) = pct_to_units(pct);
+        windows.push(QuotaWindow {
+            window_type: period_label.into(),
+            used,
+            limit,
+            remaining,
+            reset_at: period_end,
+            period_seconds,
+        });
+    }
+
     if let Some(products) = credits_cfg
         .get("productUsage")
         .or_else(|| credits_cfg.get("product_usage"))
         .and_then(|v| v.as_array())
     {
         for prod in products {
+            // Skip rows with no usagePercent (e.g. GrokChat often omits it).
+            let Some(pct) = prod
+                .get("usagePercent")
+                .or_else(|| prod.get("usage_percent"))
+                .and_then(|v| v.as_f64())
+            else {
+                continue;
+            };
             let name = prod
                 .get("product")
                 .and_then(|v| v.as_str())
                 .unwrap_or("product");
-            let pct = prod
-                .get("usagePercent")
-                .or_else(|| prod.get("usage_percent"))
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
             let (used, limit, remaining) = pct_to_units(pct);
-            // Shorten GrokBuild → build for card labels.
-            let short = match name {
-                "GrokBuild" => "build",
-                other => other,
-            };
+            let short = shorten_grok_product(name);
             windows.push(QuotaWindow {
                 window_type: format!("{}/{}", period_label, short),
-                used,
-                limit,
-                remaining,
-                reset_at: period_end,
-                period_seconds,
-            });
-            saw_product_usage = true;
-        }
-    }
-
-    // Overall period % if no per-product breakdown (or as summary when products
-    // absent). Skip when products already cover the same percentage.
-    if !saw_product_usage {
-        if let Some(pct) = credits_cfg
-            .get("creditUsagePercent")
-            .or_else(|| credits_cfg.get("credit_usage_percent"))
-            .and_then(|v| v.as_f64())
-        {
-            let (used, limit, remaining) = pct_to_units(pct);
-            windows.push(QuotaWindow {
-                window_type: period_label.into(),
                 used,
                 limit,
                 remaining,
@@ -779,6 +795,9 @@ impl crate::providers::Provider for GrokProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
             Err(e) => Ok(ProviderResult {
                 kind: ProviderKind::Grok,
@@ -789,6 +808,9 @@ impl crate::providers::Provider for GrokProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
         }
     }
@@ -848,12 +870,12 @@ mod tests {
         let quota = parse_cli_billing(&default, Some(&credits)).unwrap();
         assert_eq!(quota.plan_name, "Grok Build");
 
-        // weekly/build from productUsage, then monthly $
+        // 7d/build from productUsage, then monthly $
         let weekly = quota
             .windows
             .iter()
-            .find(|w| w.window_type == "weekly/build")
-            .expect("weekly/build window");
+            .find(|w| w.window_type == "7d/build")
+            .expect("7d/build window");
         assert!(weekly.used > 0);
         assert_eq!(weekly.limit, 100);
         assert!(weekly.reset_at.is_some());
@@ -920,11 +942,52 @@ mod tests {
         });
         let quota = parse_cli_billing(&default, Some(&credits)).unwrap();
         assert_eq!(quota.plan_name, "Grok Build");
-        assert_eq!(quota.windows[0].window_type, "weekly/build");
+        // Combined 7d first (creditUsagePercent), then product breakdown.
+        assert_eq!(quota.windows[0].window_type, "7d");
         assert_eq!(quota.windows[0].used, 74);
         assert_eq!(quota.windows[0].limit, 100);
         assert_eq!(quota.windows[0].remaining, 26);
-        assert_eq!(quota.windows[1].window_type, "monthly_allowance");
+        assert_eq!(quota.windows[1].window_type, "7d/build");
+        assert_eq!(quota.windows[1].used, 74);
+        assert_eq!(quota.windows[2].window_type, "monthly_allowance");
+    }
+
+    #[test]
+    fn parses_combined_weekly_with_api_and_build_products() {
+        // Live shape from a unified account: combined weekly = build% + api%.
+        let default = serde_json::json!({
+            "config": {
+                "monthlyLimit": { "val": 150000 },
+                "used": { "val": 133563 },
+                "billingPeriodStart": "2026-07-01T00:00:00Z",
+                "billingPeriodEnd": "2026-08-01T00:00:00Z"
+            }
+        });
+        let credits = serde_json::json!({
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-07-21T10:46:52.885620+00:00",
+                    "end": "2026-07-28T10:46:52.885620+00:00"
+                },
+                "creditUsagePercent": 100.0,
+                "productUsage": [
+                    { "product": "GrokBuild", "usagePercent": 54.0 },
+                    { "product": "Api", "usagePercent": 46.0 },
+                    { "product": "GrokChat" }
+                ],
+                "isUnifiedBillingUser": true
+            }
+        });
+        let quota = parse_cli_billing(&default, Some(&credits)).unwrap();
+        let types: Vec<&str> = quota.windows.iter().map(|w| w.window_type.as_str()).collect();
+        assert_eq!(types, ["7d", "7d/build", "7d/api", "monthly_allowance"]);
+        assert_eq!(quota.windows[0].used, 100);
+        assert_eq!(quota.windows[0].remaining, 0);
+        assert_eq!(quota.windows[1].used, 54);
+        assert_eq!(quota.windows[2].used, 46);
+        // GrokChat without usagePercent must not become a 0% window.
+        assert!(!types.iter().any(|t| t.contains("chat")));
     }
 
     #[test]

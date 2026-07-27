@@ -50,6 +50,9 @@ impl ClaudeProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -78,6 +81,9 @@ impl ClaudeProvider {
             raw_response: Some(body),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 }
@@ -269,6 +275,9 @@ impl crate::providers::Provider for ClaudeProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
         }
     }

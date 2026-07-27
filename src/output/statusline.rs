@@ -89,7 +89,7 @@ fn format_result(result: &ProviderResult, format: &str, icons: bool) -> Option<S
                 .unwrap_or_else(|| "?".into());
 
             let mut s = format.to_string();
-            s = s.replace("%provider", result.kind.display_name());
+            s = s.replace("%provider", &result.title());
             s = s.replace("%remaining", &remaining_str);
             s = s.replace("%limit", &limit_str);
             s = s.replace("%used", &used_str);
@@ -170,6 +170,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -191,6 +194,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -209,6 +215,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 
@@ -220,6 +229,9 @@ mod tests {
             raw_response: None,
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         }
     }
 

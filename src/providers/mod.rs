@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     Claude,
@@ -186,6 +186,31 @@ pub struct ProviderResult {
     /// Set when this result was read from cache (the time it was originally fetched).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_at: Option<DateTime<Utc>>,
+    /// Cache / favorites key when multi-profile (`grok:grok-1`). Absent = use [`ProviderKind::slug`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_key: Option<String>,
+    /// Profile id within a multi-profile family (`grok-1`, `claude-p`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    /// Card title override (custom name or disambiguated multi-profile label).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_title: Option<String>,
+}
+
+impl ProviderResult {
+    /// Cache / favorites key for this result.
+    pub fn cache_key(&self) -> String {
+        self.instance_key
+            .clone()
+            .unwrap_or_else(|| self.kind.slug().to_string())
+    }
+
+    /// Display name for TUI / statusline.
+    pub fn title(&self) -> String {
+        self.card_title
+            .clone()
+            .unwrap_or_else(|| self.kind.display_name().to_string())
+    }
 }
 
 #[async_trait]

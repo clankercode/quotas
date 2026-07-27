@@ -4,10 +4,20 @@
 
 | Priority | Source | Notes |
 |----------|--------|--------|
-| 1 | `~/.grok/auth.json` | **Grok Build** session from `grok login` (also `$GROK_HOME/auth.json`) |
-| 2 | `XAI_MANAGEMENT_KEY` / `XAI_MGMT_KEY` / `GROK_MANAGEMENT_KEY` | Management key for API prepaid balance |
-| 3 | `~/.xai-management-key` etc. | Same management key as a file |
-| 4 | `XAI_API_KEY` / `GROK_CODE_XAI_API_KEY` | Inference key — last resort; often cannot read billing |
+| 1 | Multi-profile home dirs | Autodetects `~/.grok/` and `~/.grok-*/` (symlink-deduped by auth file realpath). Each unique profile is a separate card. |
+| 2 | `$GROK_HOME/auth.json` | Env override for the active profile dir |
+| 3 | `~/.pi/agent/auth.json` | pi agent multi-slot auth — **fuzzy** match on `xai` / `grok` / `xai-oauth` / … |
+| 4 | `XAI_MANAGEMENT_KEY` / `XAI_MGMT_KEY` / `GROK_MANAGEMENT_KEY` | Management key for API prepaid balance (active profile only) |
+| 5 | `~/.xai-management-key` etc. | Same management key as a file |
+| 6 | `XAI_API_KEY` / `GROK_CODE_XAI_API_KEY` | Inference key — last resort; often cannot read billing |
+
+Config pin / rename example:
+
+```toml
+[profiles.entries."grok:grok-1"]
+canonical = "~/.grok-1"
+name = "Grok weekly-exhausted"
+```
 
 Grok Build auth map shape (redacted):
 
@@ -79,7 +89,7 @@ Live fixtures: `tests/fixtures/grok/cli_billing_default.json`
 }
 ```
 
-Percentages map to `used/100` windows. `currentPeriod.type` drives the label (`weekly` / `monthly` / …).
+Percentages map to `used/100` windows. `currentPeriod.type` drives the label (`7d` for weekly / `monthly` / …).
 
 Live fixtures: `tests/fixtures/grok/cli_billing_format_credits.json`
 
@@ -97,12 +107,14 @@ OAuth session tokens are rejected by the Management API (`oauth2-auth-forbidden`
 
 | Window | Path | Source |
 |--------|------|--------|
-| `weekly/build` (etc.) | `?format=credits` | `productUsage[].usagePercent` + `currentPeriod` |
-| `weekly` | `?format=credits` | `creditUsagePercent` when no product rows |
-| `monthly` | default billing | `monthlyLimit` / `used` (USD cents) |
+| `7d` | `?format=credits` | **Combined** `creditUsagePercent` (API + Grok Build + …) — always shown when present |
+| `7d/build`, `7d/api`, … | `?format=credits` | `productUsage[]` breakdown (rows without `usagePercent` are skipped) |
+| `monthly_allowance` | default billing | `monthlyLimit` / `used` (USD cents) |
 | `on_demand_usd` | either | `onDemandCap` / `onDemandUsed` when cap > 0 |
 | `balance_usd` | credits or management | prepaid remaining |
 | `credits_usd` / `spend_limit_usd` / `granted_usd` | management | invoice preview fields |
+
+Unified weekly is the pool Grok Build’s `/usage` UI shows; per-product rows sum into it (e.g. build 54% + api 46% → `7d` 100%).
 
 ## Console
 

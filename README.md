@@ -10,8 +10,8 @@ a compact statusline for shell prompts, or filterable JSON.
 
 | Provider | Auth discovery | Endpoint |
 |----------|----------------|----------|
-| **Claude** (Max/Pro subscription or API key) | `$CLAUDE_CONFIG_DIR/.credentials.json` → `~/.claude/.credentials.json` → `ANTHROPIC_API_KEY` | `GET /api/oauth/usage` on `api.anthropic.com` |
-| **Codex** / ChatGPT subscription | `~/.codex/auth.json` → `OPENAI_API_KEY` | `GET /backend-api/wham/usage` on `chatgpt.com` |
+| **Claude** (Max/Pro subscription or API key) | Multi-profile `~/.claude` + `~/.claude-*` (symlink-deduped) → opencode / pi → `ANTHROPIC_API_KEY` | `GET /api/oauth/usage` on `api.anthropic.com` |
+| **Codex** / ChatGPT subscription | Multi-profile `~/.codex` + `~/.codex-*` → opencode / pi → `OPENAI_API_KEY` | `GET /backend-api/wham/usage` on `chatgpt.com` |
 | **MiniMax** Token Plan | `MINIMAX_API_KEY` → `~/.minimax` | `GET /v1/api/openplatform/coding_plan/remains` on `api.minimax.io` |
 | **Antigravity** (agy / Google Code Assist) | Antigravity OAuth (`~/.gemini/antigravity-cli/…`) → Gemini CLI oauth → `GEMINI_API_KEY` | `POST /v1internal:retrieveUserQuotaSummary` (2 groups × 5h+7d) |
 | **Kimi** (Coding Plan + PAYG) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `GET /coding/v1/usages` and `/v1/users/me/balance` |
@@ -20,7 +20,7 @@ a compact statusline for shell prompts, or filterable JSON.
 | **SiliconFlow** | `SILICONFLOW_API_KEY` → `~/.siliconflow` | `GET /v1/user/info` on `api.siliconflow.cn` |
 | **OpenRouter** | `OPENROUTER_API_KEY` → `~/.openrouter` | `GET /api/v1/credits` on `openrouter.ai` |
 | **GitHub Copilot** | opencode `github-copilot` slot → `GITHUB_COPILOT_TOKEN` → `[github_copilot].token` in config | `GET /copilot_internal/user` on `api.github.com` |
-| **Grok / xAI** (Build monthly credits + API prepaid) | `~/.grok/auth.json` (from `grok login`) → `XAI_MANAGEMENT_KEY` → `XAI_API_KEY` | `GET /v1/billing` on `cli-chat-proxy.grok.com`; fallback Management API prepaid balance |
+| **Grok / xAI** (Build monthly credits + API prepaid) | Multi-profile `~/.grok` + `~/.grok-*` → `~/.pi/agent/auth.json` (fuzzy `xai`/`grok`) → management / API keys | `GET /v1/billing` (+ `?format=credits` combined weekly) on `cli-chat-proxy.grok.com` |
 
 ## Install
 
@@ -61,6 +61,15 @@ providers = ["claude", "codex"]   # favorite providers sort first
 [quota_preferences.codex]
 favorites = ["5h", "spark/7d"]    # favorite quotas render first
 hidden = ["o3/weekly"]            # hidden quotas stay collapsed in detail view
+
+# Multi-profile (autodetects ~/.claude-*, ~/.codex-*, ~/.grok-*)
+[profiles]
+autodetect = true
+
+[profiles.entries."grok:grok-1"]
+canonical = "~/.grok-1"           # pin auth location
+name = "Grok weekly-exhausted"    # custom card title
+# enabled = false                 # hide a discovered profile
 ```
 
 ### JSON output

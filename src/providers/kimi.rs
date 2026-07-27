@@ -58,6 +58,9 @@ impl KimiProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -79,6 +82,9 @@ impl KimiProvider {
             raw_response: Some(body),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 
@@ -103,6 +109,9 @@ impl KimiProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 

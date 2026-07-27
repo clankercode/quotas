@@ -48,6 +48,9 @@ impl SiliconFlowProvider {
                 raw_response: Some(body),
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             });
         }
 
@@ -59,6 +62,9 @@ impl SiliconFlowProvider {
             raw_response: Some(body),
             auth_source: None,
             cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
         })
     }
 }
@@ -159,6 +165,9 @@ impl crate::providers::Provider for SiliconFlowProvider {
                 raw_response: None,
                 auth_source: None,
                 cached_at: None,
+            instance_key: None,
+            profile_id: None,
+            card_title: None,
             }),
         }
     }
