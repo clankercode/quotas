@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-07-31
+
+- **Multi-profile discovery** for Claude, Codex, and Grok. Autodetects `~/.claude` + `~/.claude-*`, `~/.codex` + `~/.codex-*`, and `~/.grok` + `~/.grok-*`, symlink-deduped by canonical auth path so each unique account becomes its own card. Pin, rename, or disable via `[profiles]` / `[profiles.entries."<kind>:<id>"]` in config (`canonical`, `name`, `enabled`). Cache, TUI, JSON, and statusline keep instances separate.
+- **pi agent auth** (`~/.pi/agent/auth.json`) as an auth source with fuzzy slot matching (e.g. `xai` / `grok` / `xai-oauth`) alongside opencode slots and existing file/env keys.
+- **Grok combined weekly usage**: `creditUsagePercent` surfaces as a top-level `7d` window, with per-product `7d/build` and `7d/api` rows from `productUsage`. Docs and README updated for multi-profile + weekly windows.
+
 ## 0.10.1 - 2026-07-14
 
 - **Relicensed to Unlicense OR CC0-1.0** (public-domain dedication). `Cargo.toml` now matches the existing `LICENSE-UNLICENSE` / `LICENSE-CC0` files and README; crates.io metadata no longer claims MIT OR Apache-2.0.
