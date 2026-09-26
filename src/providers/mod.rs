@@ -5,6 +5,7 @@ pub mod deepseek;
 pub mod antigravity;
 pub mod github_copilot;
 pub mod grok;
+pub mod kilo;
 pub mod kimi;
 pub mod mimo;
 pub mod minimax;
@@ -30,6 +31,7 @@ pub enum ProviderKind {
     Antigravity,
     GitHubCopilot,
     Grok,
+    Kilo,
     Kimi,
     Mimo,
     Minimax,
@@ -58,6 +60,7 @@ impl ProviderKind {
             ProviderKind::Antigravity => "Antigravity",
             ProviderKind::GitHubCopilot => "Copilot",
             ProviderKind::Grok => "Grok",
+            ProviderKind::Kilo => "Kilo",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::Mimo => "MiMo",
             ProviderKind::Minimax => "MiniMax",
@@ -76,6 +79,7 @@ impl ProviderKind {
             ProviderKind::Antigravity => "antigravity",
             ProviderKind::GitHubCopilot => "github-copilot",
             ProviderKind::Grok => "grok",
+            ProviderKind::Kilo => "kilo",
             ProviderKind::Kimi => "kimi",
             ProviderKind::Mimo => "mimo",
             ProviderKind::Minimax => "minimax",
@@ -94,6 +98,7 @@ impl ProviderKind {
             ProviderKind::Antigravity,
             ProviderKind::GitHubCopilot,
             ProviderKind::Grok,
+            ProviderKind::Kilo,
             ProviderKind::Kimi,
             ProviderKind::Minimax,
             ProviderKind::OpenRouter,

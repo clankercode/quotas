@@ -350,6 +350,15 @@ fn build_auth_resolver(instance: &ProviderInstance, config: &Config) -> Box<dyn 
             }
             multi_auth(resolvers)
         }
+        ProviderKind::Kilo => multi_auth(vec![
+            env_auth(&[
+                ("KILOCODE_API_KEY", "kilo"),
+                ("KILO_API_KEY", "kilo"),
+                ("KILO_API_TOKEN", "kilo"),
+            ]),
+            key_file_auth(&[".kilo", ".config/kilo/token"], "kilo"),
+            pi_auth(ProviderKind::Kilo),
+        ]),
         ProviderKind::Mimo => multi_auth(vec![
             cookie_file_auth(&[".config/mimo/cookie", ".mimo-cookie"], "mimo-cookie"),
             env_auth(&[
@@ -521,6 +530,7 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
         }
         ProviderKind::Grok => Box::new(quotas::providers::grok::GrokProvider::new(auth)),
         ProviderKind::Mimo => Box::new(quotas::providers::mimo::MimoProvider::new(auth)),
+        ProviderKind::Kilo => Box::new(quotas::providers::kilo::KiloProvider::new(auth)),
         ProviderKind::GitHubCopilot => {
             Box::new(quotas::providers::github_copilot::GitHubCopilotProvider::new(auth))
         }
