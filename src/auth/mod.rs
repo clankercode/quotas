@@ -17,6 +17,10 @@ pub enum AuthCredential {
     Bearer(String),
     Token(String),
     Cookie(String),
+    /// Volcengine/BytePlus access-key + secret-key pair. The secret seeds a
+    /// local HMAC signature and is never transmitted. Only the access key
+    /// travels on the wire.
+    AkSk { access_key: String, secret_key: String },
 }
 
 impl AuthCredential {
@@ -28,6 +32,22 @@ impl AuthCredential {
             AuthCredential::Bearer(s) | AuthCredential::Token(s) => Ok(s.as_str()),
             AuthCredential::Cookie(_) => Err(Error::Auth(
                 "cookie credential cannot be used as bearer token".into(),
+            )),
+            AuthCredential::AkSk { .. } => Err(Error::Auth(
+                "access-key/secret-key credential cannot be used as bearer token".into(),
+            )),
+        }
+    }
+
+    /// Extract the access-key/secret-key pair. Only valid for AkSk credentials.
+    pub fn unwrap_aksk(&self) -> Result<(&str, &str)> {
+        match self {
+            AuthCredential::AkSk {
+                access_key,
+                secret_key,
+            } => Ok((access_key, secret_key)),
+            _ => Err(Error::Auth(
+                "credential is not an access-key/secret-key pair".into(),
             )),
         }
     }

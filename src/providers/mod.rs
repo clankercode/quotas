@@ -3,6 +3,7 @@ pub mod codex;
 pub mod cursor;
 pub mod deepseek;
 pub mod antigravity;
+pub mod byteplus;
 pub mod github_copilot;
 pub mod grok;
 pub mod kimi;
@@ -28,6 +29,7 @@ pub enum ProviderKind {
     /// older cache/config that used the previous provider name.
     #[serde(alias = "gemini")]
     Antigravity,
+    Byteplus,
     GitHubCopilot,
     Grok,
     Kimi,
@@ -56,6 +58,7 @@ impl ProviderKind {
             ProviderKind::Cursor => "Cursor",
             ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::Antigravity => "Antigravity",
+            ProviderKind::Byteplus => "BytePlus",
             ProviderKind::GitHubCopilot => "Copilot",
             ProviderKind::Grok => "Grok",
             ProviderKind::Kimi => "Kimi",
@@ -74,6 +77,7 @@ impl ProviderKind {
             ProviderKind::Cursor => "cursor",
             ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Antigravity => "antigravity",
+            ProviderKind::Byteplus => "byteplus",
             ProviderKind::GitHubCopilot => "github-copilot",
             ProviderKind::Grok => "grok",
             ProviderKind::Kimi => "kimi",
@@ -92,6 +96,7 @@ impl ProviderKind {
             ProviderKind::Cursor,
             ProviderKind::DeepSeek,
             ProviderKind::Antigravity,
+            ProviderKind::Byteplus,
             ProviderKind::GitHubCopilot,
             ProviderKind::Grok,
             ProviderKind::Kimi,

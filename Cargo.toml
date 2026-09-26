@@ -30,6 +30,10 @@ async-trait = "0.1"
 toml = "1"
 gethostname = "1"
 base64 = "0.22"
+# BytePlus ModelArk quota is behind a Volcengine v4 signed control-plane API.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 # Cursor IDE stores its session token in a SQLite globalStorage DB
 # (state.vscdb); bundled so we don't depend on a system libsqlite.
 rusqlite = { version = "0.40", features = ["bundled"] }
