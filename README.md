@@ -16,11 +16,61 @@ a compact statusline for shell prompts, or filterable JSON.
 | **Antigravity** (agy / Google Code Assist) | Antigravity OAuth (`~/.gemini/antigravity-cli/…`) → Gemini CLI oauth → `GEMINI_API_KEY` | `POST /v1internal:retrieveUserQuotaSummary` (2 groups × 5h+7d) |
 | **Kimi** (Coding Plan + PAYG) | `MOONSHOT_API_KEY` / `KIMI_API_KEY` | `GET /coding/v1/usages` and `/v1/users/me/balance` |
 | **Z.ai / GLM** Coding Plan | `ZHIPU_API_KEY` / `ZAI_API_KEY` → `~/.api-zai` | `GET /api/monitor/usage/quota/limit` on `api.z.ai` |
+| **BytePlus** ModelArk Coding Plan | `VOLCENGINE_ACCESS_KEY` + `VOLCENGINE_SECRET_KEY` (or `VOLC_ACCESSKEY` + `VOLC_SECRETKEY`) | `GetCodingPlanUsage` (Volcengine v4 signed) on `open.byteplusapi.com` |
 | **DeepSeek** | `DEEPSEEK_API_KEY` → `~/.deepseek` | `GET /user/balance` on `api.deepseek.com` |
 | **SiliconFlow** | `SILICONFLOW_API_KEY` → `~/.siliconflow` | `GET /v1/user/info` on `api.siliconflow.cn` |
 | **OpenRouter** | `OPENROUTER_API_KEY` → `~/.openrouter` | `GET /api/v1/credits` on `openrouter.ai` |
 | **GitHub Copilot** | opencode `github-copilot` slot → `GITHUB_COPILOT_TOKEN` → `[github_copilot].token` in config | `GET /copilot_internal/user` on `api.github.com` |
 | **Grok / xAI** (Build monthly credits + API prepaid) | Multi-profile `~/.grok` + `~/.grok-*` → `~/.pi/agent/auth.json` (fuzzy `xai`/`grok`) → management / API keys | `GET /v1/billing` (+ `?format=credits` combined weekly) on `cli-chat-proxy.grok.com` |
+
+### BytePlus ModelArk setup
+
+BytePlus reports Coding Plan usage through a control-plane API that verifies a
+Volcengine v4 request signature. Your `ark-` inference key (the one coding tools
+use) cannot authenticate it. It needs a separate IAM access-key/secret-key pair
+instead:
+
+1. In the [BytePlus console](https://console.byteplus.com) open **IAM -> Users**
+   and create a user with **programmatic access** (an access key, not a console
+   password).
+2. Grant it permission to read the plan. Least-privilege is a custom policy
+   scoped to the action this tool calls (**IAM -> Policies -> Create Policy**,
+   JSON editor):
+
+   ```json
+   {
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["ark:GetCodingPlanUsage"],
+         "Resource": ["*"]
+       }
+     ]
+   }
+   ```
+
+   If a leaked key only has this one action, the worst case is disclosure of
+   your usage percentages: it cannot retrieve your `ark-` inference key or spend
+   the plan, and it cannot change anything. The system-managed
+   **`ArkReadOnlyAccess`** policy is a quicker alternative, but it grants read
+   across all of ModelArk (potentially including secret-bearing reads), so
+   prefer the custom policy.
+3. Create the access key and copy both halves (the secret is shown once).
+4. Export them where `quotas` runs:
+
+   ```bash
+   export VOLCENGINE_ACCESS_KEY="AKLT..."
+   export VOLCENGINE_SECRET_KEY="..."   # seeds a local HMAC; never sent on the wire
+   ```
+
+   These are the Volcengine SDK's standard credential env names. The older
+   `VOLC_ACCESSKEY` / `VOLC_SECRETKEY` pair is also accepted. The secret signs
+   requests locally rather than being transmitted, and it must hold the actual
+   key material: a masked or placeholder secret produces a signature that will
+   not authenticate.
+
+Only the personal Coding Plan is read. The API returns percent-used per window
+(no absolute token counts) and no tier label, matching the console.
 
 ## Install
 

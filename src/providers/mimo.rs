@@ -491,6 +491,9 @@ impl crate::providers::Provider for MimoProvider {
                 // Bearer auth: try PAYG / Token Plan SGP endpoints.
                 self.fetch_bearer(key).await
             }
+            AuthCredential::AkSk { .. } => Err(crate::Error::Auth(
+                "MiMo does not use access-key/secret-key auth".into(),
+            )),
         }
     }
 

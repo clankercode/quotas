@@ -8,7 +8,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use quotas::auth::cursor::CursorAuthResolver;
-use quotas::auth::env::EnvResolver;
+use quotas::auth::env::{AkSkEnvResolver, EnvResolver};
 use quotas::auth::file::{CookieFileResolver, FileResolver};
 use quotas::auth::oauth::OAuthFileResolver;
 use quotas::auth::opencode::{KimiCliResolver, OpencodeAuthResolver, OpencodeSlot};
@@ -350,6 +350,11 @@ fn build_auth_resolver(instance: &ProviderInstance, config: &Config) -> Box<dyn 
             }
             multi_auth(resolvers)
         }
+        ProviderKind::Byteplus => multi_auth(vec![Box::new(AkSkEnvResolver::new(
+            vec!["VOLCENGINE_ACCESS_KEY", "VOLC_ACCESSKEY"],
+            vec!["VOLCENGINE_SECRET_KEY", "VOLC_SECRETKEY"],
+            "byteplus",
+        ))]),
         ProviderKind::Mimo => multi_auth(vec![
             cookie_file_auth(&[".config/mimo/cookie", ".mimo-cookie"], "mimo-cookie"),
             env_auth(&[
@@ -413,6 +418,7 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "kimi" | "moonshot" => Some(ProviderKind::Kimi),
         "minimax" => Some(ProviderKind::Minimax),
         "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
+        "byteplus" | "modelark" | "ark" => Some(ProviderKind::Byteplus),
         "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
         "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
         "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
@@ -505,6 +511,9 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
                 vec![auth],
             )),
         ),
+        ProviderKind::Byteplus => {
+            Box::new(quotas::providers::byteplus::ByteplusProvider::new(auth))
+        }
         ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
         ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
         ProviderKind::DeepSeek => {
