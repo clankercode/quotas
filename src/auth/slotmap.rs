@@ -56,6 +56,7 @@ pub fn provider_slot_aliases(kind: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Antigravity => &["antigravity", "gemini", "google", "agy"],
         ProviderKind::Cursor => &["cursor"],
         ProviderKind::Mimo => &["mimo", "xiaomi", "xiaomimimo"],
+        ProviderKind::Kilo => &["kilo", "kilocode", "kilo-code"],
     }
 }
 

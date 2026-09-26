@@ -254,6 +254,7 @@ pub fn display_label(window_type: &str, show_headers: bool) -> String {
         "extra_credits" => "Creds".to_string(),
         "payg_balance" => "PAYG".to_string(),
         "balance_usd" | "balance_cny" => "balance".to_string(),
+        "bonus_usd" => "bonus".to_string(),
         "paid_cny" => "paid".to_string(),
         "free_cny" => "free".to_string(),
         "granted_cny" | "granted_usd" => "granted".to_string(),
