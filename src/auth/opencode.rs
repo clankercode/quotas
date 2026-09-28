@@ -14,6 +14,7 @@ pub enum OpencodeSlot {
     Kimi,
     Zai,
     GitHubCopilot,
+    OpencodeGo,
 }
 
 impl OpencodeSlot {
@@ -25,6 +26,7 @@ impl OpencodeSlot {
             OpencodeSlot::Kimi => "kimi-for-coding",
             OpencodeSlot::Zai => "zai-coding-plan",
             OpencodeSlot::GitHubCopilot => "github-copilot",
+            OpencodeSlot::OpencodeGo => "opencode-go",
         }
     }
 }
