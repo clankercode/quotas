@@ -278,6 +278,14 @@ fn build_auth_resolver(instance: &ProviderInstance, config: &Config) -> Box<dyn 
             }
             multi_auth(resolvers)
         }
+        ProviderKind::OpencodeGo => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if shared {
+                resolvers.push(env_auth(&[("OPENCODE_GO_API_KEY", "opencode_go")]));
+                resolvers.push(opencode_auth(OpencodeSlot::OpencodeGo));
+            }
+            multi_auth(resolvers)
+        }
         ProviderKind::Cursor => Box::new(CursorAuthResolver::new()),
         ProviderKind::DeepSeek => multi_auth(vec![
             env_auth(&[("DEEPSEEK_API_KEY", "deepseek")]),
@@ -414,6 +422,9 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "minimax" => Some(ProviderKind::Minimax),
         "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
         "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
+        "opencode-go" | "opencode_go" | "opencodego" | "opencode" => {
+            Some(ProviderKind::OpencodeGo)
+        }
         "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
         "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
         "grok" | "xai" | "x.ai" | "x-ai" | "x_ai" => Some(ProviderKind::Grok),
@@ -516,6 +527,9 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
         ProviderKind::SiliconFlow => Box::new(
             quotas::providers::siliconflow::SiliconFlowProvider::new(auth),
         ),
+        ProviderKind::OpencodeGo => {
+            Box::new(quotas::providers::opencode_go::OpencodeGoProvider::new(auth))
+        }
         ProviderKind::OpenRouter => {
             Box::new(quotas::providers::openrouter::OpenRouterProvider::new(auth))
         }
