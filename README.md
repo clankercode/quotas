@@ -21,6 +21,7 @@ a compact statusline for shell prompts, or filterable JSON.
 | **OpenRouter** | `OPENROUTER_API_KEY` → `~/.openrouter` | `GET /api/v1/credits` on `openrouter.ai` |
 | **GitHub Copilot** | opencode `github-copilot` slot → `GITHUB_COPILOT_TOKEN` → `[github_copilot].token` in config | `GET /copilot_internal/user` on `api.github.com` |
 | **Grok / xAI** (Build monthly credits + API prepaid) | Multi-profile `~/.grok` + `~/.grok-*` → `~/.pi/agent/auth.json` (fuzzy `xai`/`grok`) → management / API keys | `GET /v1/billing` (+ `?format=credits` combined weekly) on `cli-chat-proxy.grok.com` |
+| **OpenCode Go** (Go / Go Plus subscription) | `OPENCODE_GO_API_KEY` → `~/.opencode-go` → opencode / pi (`opencode-go` slot) | `GET /zen/go/v1/usage` on `opencode.ai` |
 
 ## Install
 

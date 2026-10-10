@@ -11,9 +11,9 @@
 [x] Claude Code (custom)    $CLAUDE_CONFIG_DIR/.credentials.json     -> claude
 [x] Codex / ChatGPT CLI     ~/.codex/auth.json                       -> codex
 [x] Kimi CLI                ~/.kimi/credentials/kimi-code.json       -> kimi
-[x] opencode                ~/.local/share/opencode/auth.json        -> claude, codex, minimax, kimi, zai
-[x] opencode (XDG)          $XDG_DATA_HOME/opencode/auth.json        -> claude, codex, minimax, kimi, zai
-[x] opencode (config dir)   ~/.config/opencode/auth.json             -> claude, codex, minimax, kimi, zai
+[x] opencode                ~/.local/share/opencode/auth.json        -> claude, codex, minimax, kimi, zai, opencode-go
+[x] opencode (XDG)          $XDG_DATA_HOME/opencode/auth.json        -> claude, codex, minimax, kimi, zai, opencode-go
+[x] opencode (config dir)   ~/.config/opencode/auth.json             -> claude, codex, minimax, kimi, zai, opencode-go
 
 ## Bare-token files (first line = token, or key=value)
 
@@ -21,6 +21,7 @@
 [x] MiMo cookie             ~/.config/mimo/cookie, ~/.mimo-cookie    -> mimo  (platform.xiaomimimo.com session)
 [x] Z.ai / GLM              ~/.api-zai                               -> zai
 [x] Kimi / Moonshot         ~/.moonshot, ~/.kimi                     -> kimi
+[x] OpenCode Go             ~/.opencode-go                           -> opencode-go
 
 ## Environment variables
 
@@ -29,6 +30,7 @@
 [x] MINIMAX_API_KEY                                                  -> minimax
 [x] ZHIPU_API_KEY / ZAI_API_KEY                                      -> zai
 [x] MOONSHOT_API_KEY / KIMI_API_KEY                                  -> kimi
+[x] OPENCODE_GO_API_KEY                                              -> opencode-go
 
 ## Not yet supported (known sources worth adding)
 

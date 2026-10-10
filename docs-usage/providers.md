@@ -19,6 +19,7 @@ Research date: 2026-04-13
 | `~`    | **SiliconFlow** | Balance only (CNY paid + free); no per-model rate windows |
 | `~`    | **OpenRouter** | Credits balance (USD); no per-model rate windows |
 | `x`    | **Grok / xAI** | Grok Build monthly credits via `~/.grok/auth.json` + cli-chat-proxy; Management API prepaid fallback |
+| `x`    | **OpenCode Go** | Go / Go Plus subscription; 5h / 7d / month percent windows from `opencode.ai/zen/go/v1/usage` |
 
 ---
 

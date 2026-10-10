@@ -49,6 +49,10 @@ pub fn provider_slot_aliases(kind: ProviderKind) -> &'static [&'static str] {
         ProviderKind::Kimi => &["kimi", "moonshot", "kimi-coding", "kimi-for-coding"],
         ProviderKind::Minimax => &["minimax", "minimax-coding-plan", "minimax-coding"],
         ProviderKind::Zai => &["zai", "zhipu", "glm", "zai-coding", "zai-coding-plan", "zai-coding-cn"],
+        // NOTE: plain `opencode` is the OpenCode Zen slot — a different plan
+        // with a different key. It must never resolve for OpencodeGo; the
+        // strict-prefix guard in score_key_against_alias keeps it out.
+        ProviderKind::OpencodeGo => &["opencode-go", "opencodego", "opencode_go"],
         ProviderKind::GitHubCopilot => &["github-copilot", "copilot", "githubcopilot"],
         ProviderKind::OpenRouter => &["openrouter", "open-router"],
         ProviderKind::DeepSeek => &["deepseek", "deep-seek"],
@@ -93,7 +97,20 @@ fn score_key_against_alias(key_norm: &str, alias_norm: &str) -> i32 {
     if alias_stem.len() >= 3 && key_stem.contains(alias_stem) {
         return 500 + alias_stem.len() as i32;
     }
-    if key_stem.len() >= 3 && alias_stem.contains(key_stem) {
+    // Containment must not be a strict prefix: OpenCode Zen's slot is the
+    // plain `opencode` key, which sits inside the OpenCode Go alias
+    // `opencode-go`. Prefix-only containment stays below the floor so that
+    // key (and suffixed forms like `opencode-oauth`, which stem back to
+    // `opencode`) never resolves for ProviderKind::OpencodeGo — falling back
+    // to the Zen key would hit the wrong plan. Genuine Go variants
+    // (`opencodego`, `opencode-go-oauth`) still match via exact/stem/prefix
+    // scoring above. The cost is that a key which is a bare prefix of an
+    // alias (e.g. `anth` for `anthropic`) no longer fuzzy-matches; no known
+    // plugin uses such slot names.
+    if key_stem.len() >= 3
+        && alias_stem.contains(key_stem)
+        && !alias_stem.starts_with(key_stem)
+    {
         return 400 + key_stem.len() as i32;
     }
     0
@@ -225,6 +242,49 @@ mod tests {
     fn no_match_returns_none() {
         let keys = ["totally-unrelated", "foo"];
         assert!(find_best_slot_key(keys, ProviderKind::Grok).is_none());
+    }
+
+    #[test]
+    fn opencode_go_uses_go_slot_not_zen() {
+        // Both Zen (`opencode`) and Go (`opencode-go`) slots present: pick Go.
+        assert_eq!(
+            find_best_slot_key(["opencode", "opencode-go"], ProviderKind::OpencodeGo).as_deref(),
+            Some("opencode-go")
+        );
+        // Zen slot alone is a different plan — never claim it for Go.
+        assert!(find_best_slot_key(["opencode"], ProviderKind::OpencodeGo).is_none());
+        // Suffixed Zen variants stem back to `opencode` and must stay excluded.
+        assert!(find_best_slot_key(
+            ["opencode-oauth", "opencode-api-key", "opencode-plan", "opencode_cn"],
+            ProviderKind::OpencodeGo
+        )
+        .is_none());
+        // Suffixed Go variants still resolve.
+        assert_eq!(
+            find_best_slot_key(["opencode_go_oauth"], ProviderKind::OpencodeGo).as_deref(),
+            Some("opencode_go_oauth")
+        );
+    }
+
+    #[test]
+    fn prefix_guard_keeps_existing_full_name_matches() {
+        // The strict-prefix guard must not disturb real plugin slot names.
+        for (keys, kind, want) in [
+            (["anthropic"], ProviderKind::Claude, "anthropic"),
+            (["claude-code"], ProviderKind::Claude, "claude-code"),
+            (["zhipu"], ProviderKind::Zai, "zhipu"),
+            (["moonshot"], ProviderKind::Kimi, "moonshot"),
+            (["xiaomi"], ProviderKind::Mimo, "xiaomi"),
+            (["google"], ProviderKind::Antigravity, "google"),
+            (["copilot"], ProviderKind::GitHubCopilot, "copilot"),
+            (["minimax-coding-plan"], ProviderKind::Minimax, "minimax-coding-plan"),
+        ] {
+            assert_eq!(
+                find_best_slot_key(keys, kind).as_deref(),
+                Some(want),
+                "{kind:?} should still match {want}"
+            );
+        }
     }
 
     #[test]

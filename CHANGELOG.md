@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **OpenCode Go provider**: fetches `GET https://opencode.ai/zen/go/v1/usage` and surfaces the `5h` rolling, `7d` weekly (resets Mondays 00:00 UTC), and `month` (subscription anniversary) windows as used/100 with reset countdowns and pace markers. Auth: `OPENCODE_GO_API_KEY` → `~/.opencode-go` → opencode `auth.json` slot `opencode-go` → pi `auth.json` (the `opencode` slot is the separate Zen pay-as-you-go key and is not used for Go). The endpoint 403s generic user agents (Cloudflare error 1010 `browser_signature_banned`), so requests send `User-Agent: quotas-cli/<version>`.
+
 ## 0.11.0 - 2026-07-31
 
 - **Multi-profile discovery** for Claude, Codex, and Grok. Autodetects `~/.claude` + `~/.claude-*`, `~/.codex` + `~/.codex-*`, and `~/.grok` + `~/.grok-*`, symlink-deduped by canonical auth path so each unique account becomes its own card. Pin, rename, or disable via `[profiles]` / `[profiles.entries."<kind>:<id>"]` in config (`canonical`, `name`, `enabled`). Cache, TUI, JSON, and statusline keep instances separate.

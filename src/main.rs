@@ -236,6 +236,16 @@ fn build_auth_resolver(instance: &ProviderInstance, config: &Config) -> Box<dyn 
             }
             multi_auth(resolvers)
         }
+        ProviderKind::OpencodeGo => {
+            let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
+            if shared {
+                resolvers.push(env_auth(&[("OPENCODE_GO_API_KEY", "opencode_go")]));
+                resolvers.push(key_file_auth(&[".opencode-go"], "opencode-go"));
+                resolvers.push(opencode_auth(OpencodeSlot::OpencodeGo));
+                resolvers.push(pi_auth(ProviderKind::OpencodeGo));
+            }
+            multi_auth(resolvers)
+        }
         ProviderKind::Kimi => {
             let mut resolvers: Vec<Box<dyn AuthResolver>> = Vec::new();
             if shared {
@@ -413,6 +423,7 @@ fn normalize_provider(name: &str) -> Option<ProviderKind> {
         "kimi" | "moonshot" => Some(ProviderKind::Kimi),
         "minimax" => Some(ProviderKind::Minimax),
         "zai" | "zhipu" | "z.ai" | "glm" => Some(ProviderKind::Zai),
+        "opencode-go" | "opencodego" | "opencode_go" | "go" => Some(ProviderKind::OpencodeGo),
         "siliconflow" | "silicon-flow" | "silicon_flow" => Some(ProviderKind::SiliconFlow),
         "openrouter" | "open-router" | "open_router" => Some(ProviderKind::OpenRouter),
         "mimo" | "xiaomimimo" | "xiaomi-mimo" | "xiaomi_mimo" => Some(ProviderKind::Mimo),
@@ -506,6 +517,9 @@ fn build_provider(kind: ProviderKind, auth: Box<dyn AuthResolver>) -> Box<dyn Pr
             )),
         ),
         ProviderKind::Zai => Box::new(quotas::providers::zai::ZaiProvider::new(auth)),
+        ProviderKind::OpencodeGo => {
+            Box::new(quotas::providers::opencode_go::OpencodeGoProvider::new(auth))
+        }
         ProviderKind::Kimi => Box::new(quotas::providers::kimi::KimiProvider::new(auth)),
         ProviderKind::DeepSeek => {
             Box::new(quotas::providers::deepseek::DeepSeekProvider::new(auth))

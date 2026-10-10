@@ -9,6 +9,7 @@ pub mod kimi;
 pub mod mimo;
 pub mod minimax;
 pub mod openrouter;
+pub mod opencode_go;
 pub mod siliconflow;
 pub mod zai;
 
@@ -36,6 +37,7 @@ pub enum ProviderKind {
     OpenRouter,
     SiliconFlow,
     Zai,
+    OpencodeGo,
 }
 
 impl ProviderKind {
@@ -64,6 +66,7 @@ impl ProviderKind {
             ProviderKind::OpenRouter => "OpenRouter",
             ProviderKind::SiliconFlow => "SiliconFlow",
             ProviderKind::Zai => "Z.ai",
+            ProviderKind::OpencodeGo => "OpenCode Go",
         }
     }
 
@@ -82,6 +85,7 @@ impl ProviderKind {
             ProviderKind::OpenRouter => "openrouter",
             ProviderKind::SiliconFlow => "siliconflow",
             ProviderKind::Zai => "zai",
+            ProviderKind::OpencodeGo => "opencode-go",
         }
     }
 
@@ -99,6 +103,7 @@ impl ProviderKind {
             ProviderKind::OpenRouter,
             ProviderKind::SiliconFlow,
             ProviderKind::Zai,
+            ProviderKind::OpencodeGo,
             // ProviderKind::Mimo, // disabled — platform API requires browser cookie auth
         ]
     }
