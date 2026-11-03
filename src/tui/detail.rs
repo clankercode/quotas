@@ -359,6 +359,8 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRend
         );
         let remaining_txt = match currency {
             Some((sym, scale)) => format!("{}{:.2}L", sym, w.remaining as f64 / scale),
+            // A limit this large means the window is a scaled ratio.
+            None if w.limit > 1_000 => "·".to_string(),
             None => format!("{}L", fmt_exact(w.remaining)),
         };
         compact.push(Span::raw(remaining_txt).dim());
@@ -401,6 +403,8 @@ fn render_window(lines: &mut Vec<Line<'_>>, w: &QuotaWindow, options: WindowRend
             w.remaining as f64 / scale,
             w.limit as f64 / scale,
         ),
+        // A limit this large means the window is a scaled ratio, not a real count.
+        None if w.limit > 1_000 => format!("{:.2}% of monthly cap used", used_pct * 100.0),
         None => format!(
             "{} used · {} left · {} cap",
             fmt_exact(used),

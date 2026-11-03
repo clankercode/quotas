@@ -147,10 +147,38 @@ The kimi-cli parser (`_parse_usage_payload` in `usage.py`) expects:
 
 **Live fixtures (same account, before/after monthly reset)**
 
-| File | Captured | Account state | `totalQuota` |
-|------|----------|---------------|--------------|
-| `tests/fixtures/kimi/coding_usages_default.json` | 2026-07-11 | **Frozen** (403 `access_terminated_error`) | `{limit:100, used:1, remaining:99}` |
-| `tests/fixtures/kimi/coding_usages_post_reset.json` | 2026-07-13/14 | **Healthy** (monthly cap just reset) | `{limit:100, remaining:99}` — **no `used` field** |
+| File | Captured | Account state | Monthly cap signal |
+|------|----------|---------------|--------------------|
+| `tests/fixtures/kimi/coding_usages_default.json` | 2026-07-11 | **Frozen** (403 `access_terminated_error`) | `totalQuota {limit:100, used:1, remaining:99}` |
+| `tests/fixtures/kimi/coding_usages_post_reset.json` | 2026-07-13/14 | **Healthy** (monthly cap just reset) | `totalQuota {limit:100, remaining:99}` -- **no `used` field** |
+| `tests/fixtures/kimi/coding_usages_ratio_map.json` | 2026-11-03 | Healthy | `usages.limit_month_total {used_ratio:0.0061, reset_time:…}` |
+
+The 2026-11-03 capture shows a **newer payload shape**: the legacy
+top-level `usage` (weekly) and `totalQuota` objects are gone, replaced
+by a `usages` map of `used_ratio` fractions:
+
+```json
+{
+  "limits": [{
+    "window": { "duration": 300, "timeUnit": "TIME_UNIT_MINUTE" },
+    "detail": { "limit": "100", "remaining": "100", "resetTime": "…" }
+  }],
+  "usages": {
+    "limit_5h":         { "used_ratio": 0.0011, "reset_time": "2026-11-04T00:25:43Z" },
+    "limit_month_code": { "used_ratio": 0.0061, "reset_time": "2026-12-04T00:00:00Z" },
+    "limit_month_total":{ "used_ratio": 0.0061, "reset_time": "2026-12-04T00:00:00Z" }
+  }
+}
+```
+
+Unlike the legacy `totalQuota` counters, `used_ratio` is a **true fraction of
+the monthly cap** (0.0061 = 0.61% used), with a **real reset timestamp** from
+the server. The parser maps it into a `total_quota` window with
+`limit=10000` basis points, so sub-1% monthly usage still shows on the bar.
+`limit_month_total` (the overall membership cap that freezes Kimi Code when
+reached) is preferred. `limit_month_code` is the fallback. A payload
+containing only `limit_5h` has no monthly cap and emits no `total_quota`
+window.
 
 Frozen shape (default fixture):
 
@@ -194,14 +222,15 @@ Key differences from the inferred shape:
   parser strips it via `trim_start_matches("TIME_UNIT_")`.
 - **All numbers come back as strings** (`"100"` not `100`). The parser
   accepts both via `num_field`.
-- **`totalQuota` is the monthly Kimi-membership freeze flag**, not a
-  meaningful 0–100 usage gauge. Per the Kimi docs
+- **`totalQuota` is the monthly Kimi-membership freeze flag** (legacy
+  shape; newer payloads use `usages.limit_month_*` instead, see above),
+  not a meaningful 0-100 usage gauge. Per the Kimi docs
   ([Overview](https://www.kimi.com/code/docs/en/),
   [Membership](https://www.kimi.com/code/docs/en/kimi-code/membership.html),
   [Error Reference](https://www.kimi.com/code/docs/en/kimi-code/error-reference.html)):
   "if your Kimi membership's monthly total is reached, Kimi Code quota is
-  frozen until the monthly quota resets or you upgrade." The parser
-  surfaces this as `total_quota` and collapses it to a **binary signal**:
+  frozen until the monthly quota resets or you upgrade." The parser reports
+  this field as `total_quota` and collapses it to a **binary signal**:
   - `used` present and `>0` → **exhausted** (frozen)
   - `used` absent, or `used=0` → **available**
   - `remaining` is **sticky at 99 across frozen and healthy** and is
@@ -233,6 +262,9 @@ Field semantics derived from the parser:
 | `limits[].detail.used`      | int    | Tokens consumed in current window |
 | `limits[].window.duration`  | int    | Window size (e.g. 300) |
 | `limits[].window.timeUnit`  | string | "MINUTE" / "HOUR" / "DAY" |
+| `usages.limit_month_total.used_ratio` | float | Fraction (0-1) of monthly cap used. Preferred monthly signal. |
+| `usages.limit_month_code.used_ratio` | float | Fraction (0-1) of the monthly cap used by code-model requests only. Fallback when `limit_month_total` is absent. |
+| `usages.*.reset_time`       | string | ISO 8601 reset timestamp (snake_case). The parser also accepts `resetTime`. |
 
 The parser also checks for `resetAt`, `reset_time`, `resetTime`, `reset_in`,
 `resetIn`, `ttl`, and `window` fields as alternative reset hints -- suggesting
@@ -323,9 +355,10 @@ plugin can import those helpers directly.
 ## Open questions / unknowns
 
 1. **Exact response shape of `/usages`**: Live fixtures under
-   `tests/fixtures/kimi/` pin the current oversea Coding Plan shape
-   (string numbers, `resetTime`, `TIME_UNIT_*`). Field-name variants
-   remain handled defensively for older/other regions.
+   `tests/fixtures/kimi/` pin both known shapes -- the legacy
+   `usage`/`totalQuota` counters (July 2026) and the newer `usages` `used_ratio`
+   map (November 2026). Field-name variants remain handled defensively for
+   older/other regions.
 
 2. **Rate-limit response headers**: Neither surface has documented headers.
    Need empirical testing (`curl -v`) to check.

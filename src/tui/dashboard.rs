@@ -1610,8 +1610,9 @@ fn bar_overlay_text(
     window_type: &str,
 ) -> String {
     let pct = format!("{:.0}%", used_pct * 100.0);
-    // Binary-signal windows (Kimi `total_quota` collapses to limit=1) have no
-    // meaningful numerator/denominator — show the percentage only.
+    // Kimi `total_quota` windows express used/limit on scales that are not
+    // real counts: the legacy binary shape always reports limit=1, and the
+    // newer used_ratio shape is scaled to basis points (limit=10000).
     if window_type == "total_quota" || bar_width < 10 {
         return pct;
     }

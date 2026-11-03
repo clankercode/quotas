@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Kimi monthly cap parsed from the new `usages` `used_ratio` map.** Live
+  `/usages` payloads (captured 2026-11-03 into
+  `tests/fixtures/kimi/coding_usages_ratio_map.json`) no longer send the legacy
+  top-level `usage`/`totalQuota` objects. The monthly cap now arrives as
+  `used_ratio` fractions keyed by `limit_month_total` / `limit_month_code`, with
+  a real server `reset_time`. The parser only knew the old shape, so the Kimi
+  card showed just the 5h window. `used_ratio` is a true fraction of the cap
+  (0.0061 = 0.61% used), unlike the legacy counter where any `used>0` froze the
+  account, so the new shape renders as a fractional bar scaled to basis points
+  (limit=10000) rather than the legacy binary signal. `limit_month_total` is
+  preferred, `limit_month_code` is the fallback, and 5h-only payloads don't emit
+  a monthly window. The legacy `totalQuota` binary path is kept for old payloads
+  and guarded so the two never double-emit. `parse_reset` also accepts
+  snake_case `reset_time`. Card overlay and detail view skip the meaningless
+  basis-point raw counts, showing the percentage and "resets in Xd" hint
+  instead. Tests: `parses_live_coding_usages_ratio_map_fixture`,
+  `parses_monthly_usage_ratio_map`,
+  `monthly_usage_ratio_falls_back_to_code_key`,
+  `monthly_usage_ratio_ignores_5h_only_payloads`.
+
 ## 0.11.0 - 2026-07-31
 
 - **Multi-profile discovery** for Claude, Codex, and Grok. Autodetects `~/.claude` + `~/.claude-*`, `~/.codex` + `~/.codex-*`, and `~/.grok` + `~/.grok-*`, symlink-deduped by canonical auth path so each unique account becomes its own card. Pin, rename, or disable via `[profiles]` / `[profiles.entries."<kind>:<id>"]` in config (`canonical`, `name`, `enabled`). Cache, TUI, JSON, and statusline keep instances separate.

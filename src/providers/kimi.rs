@@ -128,11 +128,21 @@ fn num_field(v: &serde_json::Value, key: &str) -> i64 {
     }
 }
 
+/// Looks up `key` in `v`, accepting both JSON numbers and numeric strings.
+fn ratio_field(v: &serde_json::Value, key: &str) -> Option<f64> {
+    match v.get(key) {
+        Some(serde_json::Value::Number(n)) => n.as_f64(),
+        Some(serde_json::Value::String(s)) => s.parse().ok(),
+        _ => None,
+    }
+}
+
 fn parse_reset(v: &serde_json::Value) -> Option<DateTime<Utc>> {
     let s = v
         .get("reset_at")
         .or_else(|| v.get("resetTime"))
         .or_else(|| v.get("resetAt"))
+        .or_else(|| v.get("reset_time"))
         .and_then(|x| x.as_str())?;
     DateTime::parse_from_rfc3339(s)
         .ok()
@@ -281,6 +291,9 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
     // more likely than calendar month — the hint can be off by weeks.
     // `period_seconds` stays None so the binary bar doesn't get an
     // overspend/slack overlay based on elapsed calendar time.
+
+    // Legacy shape only. Newer payloads moved the monthly cap into the
+    // `usages` map (handled below) and no longer send `totalQuota`.
     if let Some(total) = body.get("totalQuota").and_then(|v| v.as_object()) {
         let total_value = serde_json::Value::Object(total.clone());
         // Emit when we have any totalQuota usage signal. `used` is the
@@ -299,6 +312,38 @@ pub(crate) fn parse_coding_response(body: &serde_json::Value, now: DateTime<Utc>
                 reset_at: Some(next_month_reset(now)),
                 period_seconds: None,
             });
+        }
+    }
+
+    // Newer /usages payloads report the monthly cap as a `used_ratio`
+    // fraction in a `usages` map instead of the legacy `totalQuota` fields.
+    if body.get("totalQuota").is_none() {
+        // The legacy shape is parsed above when `totalQuota` is present.
+        if let Some(usages) = body.get("usages").and_then(|v| v.as_object()) {
+            // `limit_month_total` is the overall membership cap that freezes
+            // Kimi Code when reached. `limit_month_code` reports the same
+            // consumption when `limit_month_total` is absent.
+            let monthly = usages.get("limit_month_total").or_else(|| usages.get("limit_month_code"));
+            if let Some(monthly) = monthly.and_then(|v| v.as_object()) {
+                if let Some(ratio) = ratio_field(&serde_json::Value::Object(monthly.clone()), "used_ratio") {
+                    // Basis points (parts per 10,000) rather than percent:
+                    // at percent scale, usage under 1% would round down to
+                    // zero and the bar would look empty even though some
+                    // quota was consumed.
+                    let basis = 10_000i64;
+                    let used = (ratio.clamp(0.0, 1.0) * basis as f64).round() as i64;
+                    windows.push(QuotaWindow {
+                        window_type: "total_quota".to_string(),
+                        used,
+                        limit: basis,
+                        remaining: basis - used,
+                        reset_at: parse_reset(&serde_json::Value::Object(monthly.clone())),
+                        // `period_seconds` stays unset because Kimi's API
+                        // doesn't give a monthly cycle length.
+                        period_seconds: None,
+                    });
+                }
+            }
         }
     }
 
@@ -471,6 +516,109 @@ mod tests {
             Some(DateTime::parse_from_rfc3339("2026-08-01T00:00:00+00:00").unwrap().with_timezone(&Utc))
         );
         assert!(total.period_seconds.is_none());
+    }
+
+    #[test]
+    fn parses_live_coding_usages_ratio_map_fixture() {
+        // Captured live on 2026-11-03: the API response has a `usages` map
+        // with `used_ratio` fractions and no top-level `usage`/`totalQuota`.
+        let body = fixture("coding_usages_ratio_map.json");
+        let quota = parse_coding_response(&body, now());
+
+        assert_eq!(quota.windows.len(), 2, "5h + monthly; no weekly in this shape");
+
+        let monthly = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota window");
+        assert_eq!(monthly.limit, 10_000);
+        assert_eq!(monthly.used, 61);
+        assert_eq!(
+            monthly.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-12-04T00:00:00Z").unwrap().with_timezone(&Utc))
+        );
+    }
+
+    #[test]
+    fn parses_monthly_usage_ratio_map() {
+        // Newer /usages payloads (live capture 2026-11-03) drop the legacy
+        // top-level `usage`/`totalQuota` and report the monthly cap as a
+        // `used_ratio` fraction inside a `usages` map.
+        let body = serde_json::json!({
+            "limits": [{
+                "detail": {"limit": "100", "remaining": "100",
+                            "resetTime": "2026-11-04T00:25:43.518550Z"},
+                "window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}
+            }],
+            "usages": {
+                "limit_5h": {"reset_time": "2026-11-04T00:25:43Z", "used_ratio": 0.0011},
+                "limit_month_code": {"reset_time": "2026-12-04T00:00:00Z", "used_ratio": 0.0061},
+                "limit_month_total": {"reset_time": "2026-12-04T00:00:00Z", "used_ratio": 0.0061}
+            }
+        });
+        let quota = parse_coding_response(&body, now());
+
+        assert_eq!(quota.windows.len(), 2, "5h + monthly; weekly absent in new shape");
+
+        let monthly = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("monthly total_quota window");
+        assert_eq!(monthly.limit, 10_000, "basis-point scale");
+        assert_eq!(monthly.used, 61, "0.0061 * 10000, rounded");
+        assert_eq!(monthly.remaining, 10_000 - 61);
+        assert_eq!(
+            monthly.reset_at,
+            Some(DateTime::parse_from_rfc3339("2026-12-04T00:00:00Z").unwrap().with_timezone(&Utc)),
+            "server-supplied reset timestamp"
+        );
+
+        let five_h = quota
+            .windows
+            .iter()
+            .find(|w| w.window_type == "5h")
+            .expect("5h window");
+        assert_eq!(five_h.limit, 100);
+        assert_eq!(five_h.remaining, 100);
+    }
+
+    #[test]
+    fn monthly_usage_ratio_falls_back_to_code_key() {
+        // Some payloads only contain `limit_month_code` (the code-model slice
+        // of the monthly cap) without `limit_month_total`.
+        let body = serde_json::json!({
+            "limits": [],
+            "usages": {
+                "limit_month_code": {"reset_time": "2026-12-04T00:00:00Z", "used_ratio": 0.5}
+            }
+        });
+        let total = parse_coding_response(&body, now())
+            .windows
+            .into_iter()
+            .find(|w| w.window_type == "total_quota")
+            .expect("total_quota from limit_month_code fallback");
+        assert_eq!(total.used, 5_000);
+        assert_eq!(total.limit, 10_000);
+    }
+
+    #[test]
+    fn monthly_usage_ratio_ignores_5h_only_payloads() {
+        // Free-tier or 5h-only accounts lack a monthly cap to surface.
+        // Emitting a monthly window requires more than just `limit_5h` in
+        // the payload.
+        let body = serde_json::json!({
+            "limits": [],
+            "usages": {
+                "limit_5h": {"reset_time": "2026-11-04T00:25:43Z", "used_ratio": 0.4}
+            }
+        });
+        let quota = parse_coding_response(&body, now());
+        assert!(
+            !quota.windows.iter().any(|w| w.window_type == "total_quota"),
+            "no monthly cap in payload => no total_quota window"
+        );
     }
 
     #[test]
